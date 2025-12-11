@@ -4,7 +4,7 @@ import (
     "log"
     "os"
 
-    "github.com/yourname/remote-docker-agent/pkg/agent"
+    "github.com/teamycloud/remote-docker-agent/pkg/agent"
 )
 
 func main() {
