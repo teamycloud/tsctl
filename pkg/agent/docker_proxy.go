@@ -74,9 +74,107 @@ func (p *DockerProxy) HandleCreateContainer(w http.ResponseWriter, r *http.Reque
 	}
 	defer resp.Body.Close()
 
+	DumpResponseSafe(resp)
+
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+func (p *DockerProxy) HandleAttach(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("handling attach")
+
+	// 1. Hijack client connection
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+	clientConn, _, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+
+	// 2. Dial remote Docker via SSH
+	remoteConn, err := p.sshClient.DialRemoteDocker()
+	if err != nil {
+		clientConn.Close()
+		return
+	}
+
+	// 3. Forward the ORIGINAL request exactly as bytes
+	if err := r.Write(remoteConn); err != nil {
+		clientConn.Close()
+		remoteConn.Close()
+		return
+	}
+
+	// 4. Copy response headers from remote to client in chunks,
+	//    stopping *exactly* at the end of the header section (\r\n\r\n).
+	//    We don't parse; we just detect the delimiter.
+	const headerTerminator = "\r\n\r\n"
+	headerBuf := make([]byte, 0, 4096)
+	tmp := make([]byte, 64)
+	var extraBytes []byte
+
+	for {
+		n, err := remoteConn.Read(tmp)
+		if n > 0 {
+			headerBuf = append(headerBuf, tmp[:n]...)
+			// Check if we've received the header terminator
+			if idx := bytes.Index(headerBuf, []byte(headerTerminator)); idx != -1 {
+				// Found the terminator at position idx
+				// Split: header ends at idx + len(terminator)
+				headerEnd := idx + len(headerTerminator)
+				extraBytes = make([]byte, len(headerBuf)-headerEnd)
+				copy(extraBytes, headerBuf[headerEnd:])
+				headerBuf = headerBuf[:headerEnd]
+				break
+			}
+		}
+		if err != nil {
+			// EOF before headers complete = error
+			clientConn.Close()
+			remoteConn.Close()
+			return
+		}
+	}
+
+	fmt.Println("writing response header to client, length:", len(headerBuf))
+	// Write through immediately so client sees the same bytes
+	if _, werr := clientConn.Write(headerBuf); werr != nil {
+		clientConn.Close()
+		remoteConn.Close()
+		return
+	}
+
+	// If we read extra bytes beyond the header, write them to the client first
+	if len(extraBytes) > 0 {
+		if _, werr := clientConn.Write(extraBytes); werr != nil {
+			clientConn.Close()
+			remoteConn.Close()
+			return
+		}
+	}
+
+	pipe := func(writer, reader net.Conn) {
+		defer func(writer net.Conn) {
+			_ = writer.Close()
+		}(writer)
+		defer func(reader net.Conn) {
+			_ = reader.Close()
+		}(reader)
+
+		_, err := io.Copy(writer, reader)
+		if err != nil {
+			fmt.Printf("port forward failed: %s\n", err)
+			return
+		}
+	}
+
+	// 5. From here on, it's raw multiplexed stream in both directions.
+	go pipe(clientConn, remoteConn)
+	go pipe(remoteConn, clientConn)
 }
 
 func (p *DockerProxy) HandleGeneric(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +191,8 @@ func (p *DockerProxy) HandleGeneric(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+
+	DumpResponseSafe(resp)
 
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)

@@ -1,2 +1,4 @@
 remote-docker-agent
 .DS_Store
+
+.idea/
