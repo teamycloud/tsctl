@@ -1,14 +1,15 @@
-# TCP Agent - TCP-based Docker API Proxy
+# TCP Agent - HTTP-Aware Docker API Proxy over SSH
 
-The `tcp_agent` package provides TCP-based proxies for Docker API over SSH tunnels with HTTP-level interception capabilities.
+The `tcp_agent` package provides an HTTP-aware TCP proxy that forwards Docker API traffic through SSH tunnels with selective request interception capabilities.
 
 ## Features
 
-- **HTTP-Aware Interception**: Parse and intercept specific Docker API calls (e.g., container create)
-- **Selective Transparency**: Intercept only specific endpoints while maintaining transparent TCP proxy for others
-- **Docker API Dumping**: Log and inspect Docker API requests and responses
-- **Transparent Fallback**: Automatically falls back to transparent TCP proxy for non-HTTP traffic
-- **SSH Tunneling**: Secure connection to remote Docker daemons
+- **SSH Transport**: Secure Docker API access over SSH tunnels
+- **HTTP Keep-Alive Support**: Handles multiple HTTP requests on the same TCP connection
+- **Selective Interception**: Parse and intercept specific Docker API calls (e.g., container create)
+- **Protocol Upgrade Detection**: Automatically switches to transparent TCP mode for upgraded connections (attach, exec)
+- **Transparent Fallback**: Raw TCP proxy for non-HTTP traffic
+- **Unix Socket Support**: Connect to Docker via Unix sockets or TCP on remote hosts
 
 ## Architecture
 
@@ -21,10 +22,76 @@ The `tcp_agent` package provides TCP-based proxies for Docker API over SSH tunne
                             ├─ Parse HTTP requests
                             ├─ Intercept specific endpoints
                             ├─ Dump request/response
-                            └─ Transparent proxy for others
+                            ├─ Handle Keep-Alive
+                            └─ Detect protocol upgrades
 ```
 
-## Components
+## Usage
+
+### Basic Example
+
+```go
+package main
+
+import (
+    "log"
+    "github.com/teamycloud/remote-docker-agent/pkg/tcp_agent"
+)
+
+func main() {
+    cfg := tcp_agent.Config{
+        ListenAddr:   "127.0.0.1:2375",
+        SSHUser:      "root",
+        SSHHost:      "remote.example.com:22",
+        SSHKeyPath:   "/home/user/.ssh/id_rsa",
+        RemoteDocker: "unix:///var/run/docker.sock",
+    }
+
+    proxy, err := tcp_agent.NewTCPProxy(cfg)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer proxy.Close()
+
+    if err := proxy.ListenAndServe(); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### Command Line Example
+
+```bash
+# Build the example
+go build -o tcp-proxy ./cmd/tcp_proxy_example
+
+# Run with SSH transport
+./tcp-proxy \
+  -listen 127.0.0.1:2375 \
+  -ssh-user root \
+  -ssh-host remote.example.com:22 \
+  -ssh-key ~/.ssh/id_rsa \
+  -remote-docker unix:///var/run/docker.sock
+
+# Use Docker CLI with the proxy
+export DOCKER_HOST=tcp://127.0.0.1:2375
+docker ps
+docker run -it hello-world
+```
+
+## Configuration
+
+### Config Fields
+
+- **`ListenAddr`**: Local address to listen on (e.g., `"127.0.0.1:2375"`)
+- **`SSHUser`**: SSH username for remote connection (e.g., `"root"`)
+- **`SSHHost`**: SSH host and port (e.g., `"remote.example.com:22"`)
+- **`SSHKeyPath`**: Path to SSH private key (e.g., `"/home/user/.ssh/id_rsa"`)
+- **`RemoteDocker`**: Remote Docker socket URL:
+  - Unix socket: `"unix:///var/run/docker.sock"`
+  - TCP: `"tcp://127.0.0.1:2375"`
+
+## How It Works
 
 ### 1. HTTP-Aware TCP Proxy (`tcp_proxy.go`)
 

@@ -3,6 +3,7 @@ package tcp_agent
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -23,18 +24,23 @@ var (
 // through an SSH tunnel to a remote Docker daemon
 type TCPProxy struct {
 	cfg       Config
-	tcpClient *net.Dialer
+	sshClient *SSHClient
 	listener  net.Listener
 	wg        sync.WaitGroup
 	stopCh    chan struct{}
 }
 
-// NewTCPProxy creates a new TCP proxy instance
+// NewTCPProxy creates a new TCP proxy instance and establishes SSH connection
 func NewTCPProxy(cfg Config) (*TCPProxy, error) {
-	tcpClient := &net.Dialer{}
+	// Create SSH client
+	sshClient, err := NewSSHClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create ssh client: %w", err)
+	}
+
 	return &TCPProxy{
 		cfg:       cfg,
-		tcpClient: tcpClient,
+		sshClient: sshClient,
 		stopCh:    make(chan struct{}),
 	}, nil
 }
@@ -47,7 +53,7 @@ func (p *TCPProxy) ListenAndServe() error {
 	}
 	p.listener = listener
 
-	log.Printf("TCP proxy listening on %s, proxying to %s via SSH", p.cfg.ListenAddr, p.cfg.RemoteAddress)
+	log.Printf("TCP proxy listening on %s, proxying to %s via SSH", p.cfg.ListenAddr, p.cfg.RemoteDocker)
 
 	for {
 		select {
@@ -81,14 +87,14 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
 	// Establish connection to remote Docker via SSH
-	remoteConn, err := p.tcpClient.Dial("tcp", p.cfg.RemoteAddress)
+	remoteConn, err := p.sshClient.DialRemoteDocker()
 	if err != nil {
 		log.Printf("Failed to dial remote Docker: %v", err)
 		return
 	}
 	defer remoteConn.Close()
 
-	log.Printf("New connection from %s -> %s", clientConn.RemoteAddr(), p.cfg.RemoteAddress)
+	log.Printf("New connection from %s -> %s", clientConn.RemoteAddr(), p.cfg.RemoteDocker)
 
 	// Create buffered readers for both directions
 	clientReader := bufio.NewReader(clientConn)
@@ -279,6 +285,13 @@ func (p *TCPProxy) Close() error {
 	}
 
 	p.wg.Wait()
+
+	// Close SSH connection
+	if p.sshClient != nil {
+		if err := p.sshClient.Close(); err != nil {
+			log.Printf("Error closing SSH client: %v", err)
+		}
+	}
 
 	return nil
 }
