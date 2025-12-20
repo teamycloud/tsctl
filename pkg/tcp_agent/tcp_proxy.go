@@ -3,12 +3,12 @@ package tcp_agent
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"regexp"
 	"sync"
 )
@@ -17,17 +17,22 @@ var (
 	// Pattern to match /containers/create
 	containerCreatePattern = regexp.MustCompile(`^/v[\d.]+/containers/create$`)
 	// Pattern to match /containers/{id}/start
-	containerStartPattern = regexp.MustCompile(`^/v[\d.]+/containers/[a-f0-9]+/start$`)
+	containerStartPattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-f0-9]+)/start$`)
+	// Pattern to match /containers/{id}/stop
+	containerStopPattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-f0-9]+)/stop$`)
+	// Pattern to match DELETE /containers/{id}
+	containerRemovePattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-f0-9]+)$`)
 )
 
 // TCPProxy implements a transparent TCP proxy that forwards connections
 // through an SSH tunnel to a remote Docker daemon
 type TCPProxy struct {
-	cfg       Config
-	sshClient *SSHClient
-	listener  net.Listener
-	wg        sync.WaitGroup
-	stopCh    chan struct{}
+	cfg            Config
+	sshClient      *SSHClient
+	portForwardMgr *PortForwardManager
+	listener       net.Listener
+	wg             sync.WaitGroup
+	stopCh         chan struct{}
 }
 
 // NewTCPProxy creates a new TCP proxy instance and establishes SSH connection
@@ -38,10 +43,14 @@ func NewTCPProxy(cfg Config) (*TCPProxy, error) {
 		return nil, fmt.Errorf("create ssh client: %w", err)
 	}
 
+	// Create port forward manager
+	portForwardMgr := NewPortForwardManager(sshClient)
+
 	return &TCPProxy{
-		cfg:       cfg,
-		sshClient: sshClient,
-		stopCh:    make(chan struct{}),
+		cfg:            cfg,
+		sshClient:      sshClient,
+		portForwardMgr: portForwardMgr,
+		stopCh:         make(chan struct{}),
 	}, nil
 }
 
@@ -115,13 +124,8 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 			return
 		}
 
-		// Check if this request should be intercepted
-		if shouldInterceptRequest(req) {
-			log.Printf("!!! INTERCEPTING: %s %s !!!", req.Method, req.URL.Path)
-			dumpHTTPRequest(req)
-		} else {
-			log.Printf("Proxying: %s %s", req.Method, req.URL.Path)
-		}
+		// Handle container lifecycle operations BEFORE forwarding
+		p.handleContainerOperation(req)
 
 		// Forward the request to remote Docker
 		if err := req.Write(remoteConn); err != nil {
@@ -135,6 +139,9 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 			log.Printf("Failed to read response: %v", err)
 			return
 		}
+
+		// Handle container lifecycle operations AFTER receiving response
+		p.handleContainerOperationResponse(req, resp)
 
 		// Write response back to client
 		if err := resp.Write(clientConn); err != nil {
@@ -161,6 +168,136 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 		// Continue loop to handle next request on same connection
 		log.Printf("Waiting for next request on connection from %s", clientConn.RemoteAddr())
 	}
+}
+
+// handleContainerOperation handles container operations BEFORE forwarding the request
+func (p *TCPProxy) handleContainerOperation(req *http.Request) {
+	// Handle container create - extract port bindings
+	if req.Method == http.MethodPost && containerCreatePattern.MatchString(req.URL.Path) {
+		p.handleContainerCreateRequest(req)
+	}
+
+	// Handle container stop/remove - tear down port forwards
+	if req.Method == http.MethodPost && containerStopPattern.MatchString(req.URL.Path) {
+		matches := containerStopPattern.FindStringSubmatch(req.URL.Path)
+		if len(matches) > 1 {
+			containerID := matches[1]
+			log.Printf("Container stop detected: %s", containerID)
+			p.portForwardMgr.TeardownForwards(containerID)
+		}
+	}
+
+	if req.Method == http.MethodDelete && containerRemovePattern.MatchString(req.URL.Path) {
+		matches := containerRemovePattern.FindStringSubmatch(req.URL.Path)
+		if len(matches) > 1 {
+			containerID := matches[1]
+			log.Printf("Container remove detected: %s", containerID)
+			p.portForwardMgr.TeardownForwards(containerID)
+		}
+	}
+}
+
+// handleContainerOperationResponse handles container operations AFTER receiving the response
+func (p *TCPProxy) handleContainerOperationResponse(req *http.Request, resp *http.Response) {
+	// Handle container create - extract port bindings
+	if req.Method == http.MethodPost && containerCreatePattern.MatchString(req.URL.Path) {
+		p.handleContainerCreateResponse(req, resp)
+	}
+
+	// Handle container start - setup port forwards
+	if req.Method == http.MethodPost && containerStartPattern.MatchString(req.URL.Path) {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			matches := containerStartPattern.FindStringSubmatch(req.URL.Path)
+			if len(matches) > 1 {
+				containerID := matches[1]
+				log.Printf("Container start detected: %s", containerID)
+				if err := p.portForwardMgr.SetupForwards(containerID); err != nil {
+					log.Printf("Failed to setup port forwards for %s: %v", containerID, err)
+				}
+			}
+		}
+	}
+}
+
+// handleContainerCreate extracts port bindings from container create request and stores them
+func (p *TCPProxy) handleContainerCreateRequest(req *http.Request) {
+	reqBytes, err := dumpRequestBody(req)
+	if err != nil {
+		log.Printf("Failed to dump HTTP request: %v", err)
+		return
+	}
+
+	// Parse request JSON to get port bindings
+	var createReq struct {
+		HostConfig struct {
+			PortBindings map[string][]struct {
+				HostIp   string `json:"HostIp"`
+				HostPort string `json:"HostPort"`
+			} `json:"PortBindings"`
+		} `json:"HostConfig"`
+	}
+
+	if err := json.Unmarshal(reqBytes, &createReq); err != nil {
+		log.Printf("Failed to parse container create request: %v", err)
+		return
+	}
+
+	// Extract port bindings
+	portBindings := make(map[string][]string)
+	for containerPort, bindings := range createReq.HostConfig.PortBindings {
+		hostPorts := make([]string, 0)
+		for _, binding := range bindings {
+			if binding.HostPort != "" {
+				hostPorts = append(hostPorts, binding.HostPort)
+			}
+		}
+		if len(hostPorts) > 0 {
+			portBindings[containerPort] = hostPorts
+			log.Printf("Port binding found: %s -> %v", containerPort, hostPorts)
+		}
+	}
+
+	if len(portBindings) > 0 {
+		p.portForwardMgr.StorePortBindingsStart(req, portBindings)
+	}
+}
+
+// handleContainerCreate extracts port bindings from container create request and stores them
+func (p *TCPProxy) handleContainerCreateResponse(req *http.Request, resp *http.Response) {
+	if resp.StatusCode != 201 {
+		log.Printf("Container create detected with unexpected status code: %d", resp.StatusCode)
+		p.portForwardMgr.StorePortBindingsEnd(req, "")
+		return
+	}
+
+	// Read response body to get container ID
+	var respBody bytes.Buffer
+	if resp.Body != nil {
+		body, _ := io.ReadAll(resp.Body)
+		respBody.Write(body)
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+	}
+
+	// Parse response JSON to get container ID
+	var createResp struct {
+		Id       string   `json:"Id"`
+		Warnings []string `json:"Warnings"`
+	}
+
+	if err := json.Unmarshal(respBody.Bytes(), &createResp); err != nil {
+		log.Printf("Failed to parse container create response: %v", err)
+		p.portForwardMgr.StorePortBindingsEnd(req, "")
+		return
+	}
+
+	if createResp.Id == "" {
+		log.Printf("No container ID in create response")
+		p.portForwardMgr.StorePortBindingsEnd(req, "")
+		return
+	}
+
+	log.Printf("Container created with ID: %s", createResp.Id)
+	p.portForwardMgr.StorePortBindingsEnd(req, createResp.Id)
 }
 
 // transparentProxyWithReaders handles bidirectional copying with buffered readers
@@ -286,6 +423,11 @@ func (p *TCPProxy) Close() error {
 
 	p.wg.Wait()
 
+	// Tear down all port forwards
+	if p.portForwardMgr != nil {
+		p.portForwardMgr.TeardownAll()
+	}
+
 	// Close SSH connection
 	if p.sshClient != nil {
 		if err := p.sshClient.Close(); err != nil {
@@ -296,28 +438,16 @@ func (p *TCPProxy) Close() error {
 	return nil
 }
 
-// dumpHTTPRequest logs HTTP request details for debugging
-func dumpHTTPRequest(r *http.Request) {
+// dumpRequestBody logs HTTP request details for debugging
+func dumpRequestBody(r *http.Request) ([]byte, error) {
 	var body []byte
 	if r.Body != nil {
 		body, _ = io.ReadAll(r.Body)
+		// Restore body
 		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
-	b, err := httputil.DumpRequest(r, false) // headers only
-	if err != nil {
-		log.Printf("dump request error: %v", err)
-		return
-	}
-
-	log.Printf("=== INTERCEPTED HTTP REQUEST ===\n%s", b)
-	if len(body) > 0 {
-		log.Printf("Body:\n%s", body)
-	}
-	log.Printf("================================\n")
-
-	// Restore body
-	r.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
 }
 
 // shouldInterceptRequest checks if the request should be intercepted
