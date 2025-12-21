@@ -11,6 +11,9 @@ import (
 	"net/http"
 	"regexp"
 	"sync"
+
+	"github.com/mutagen-io/mutagen/pkg/forwarding"
+	"github.com/mutagen-io/mutagen/pkg/synchronization"
 )
 
 var (
@@ -32,13 +35,14 @@ type TCPProxy struct {
 	cfg            Config
 	sshClient      *SSHClient
 	portForwardMgr *PortForwardManager
+	mutagenSyncMgr *synchronization.Manager
 	listener       net.Listener
 	wg             sync.WaitGroup
 	stopCh         chan struct{}
 }
 
 // NewTCPProxy creates a new TCP proxy instance and establishes SSH connection
-func NewTCPProxy(cfg Config) (*TCPProxy, error) {
+func NewTCPProxy(cfg Config, forwardingManager *forwarding.Manager, synchronizationManager *synchronization.Manager) (*TCPProxy, error) {
 	// Create SSH client
 	sshClient, err := NewSSHClient(cfg)
 	if err != nil {
@@ -46,12 +50,13 @@ func NewTCPProxy(cfg Config) (*TCPProxy, error) {
 	}
 
 	// Create port forward manager
-	portForwardMgr := NewPortForwardManager(sshClient)
+	portForwardMgr := NewPortForwardManager(cfg, forwardingManager)
 
 	return &TCPProxy{
 		cfg:            cfg,
 		sshClient:      sshClient,
 		portForwardMgr: portForwardMgr,
+		mutagenSyncMgr: synchronizationManager,
 		stopCh:         make(chan struct{}),
 	}, nil
 }

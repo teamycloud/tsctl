@@ -1,14 +1,24 @@
 package tcp_agent
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
-	"strconv"
+	"os"
 	"strings"
 	"sync"
+
+	"github.com/mutagen-io/mutagen/pkg/configuration/global"
+	"github.com/mutagen-io/mutagen/pkg/filesystem"
+	"github.com/mutagen-io/mutagen/pkg/forwarding"
+	"github.com/mutagen-io/mutagen/pkg/selection"
+	forwardingsvc "github.com/mutagen-io/mutagen/pkg/service/forwarding"
+	"github.com/mutagen-io/mutagen/pkg/url"
 )
 
 // PortBinding represents a port mapping from local to remote
@@ -17,6 +27,7 @@ type PortBinding struct {
 	ContainerPort string // Container port with protocol (e.g., "80/tcp")
 	Protocol      string // tcp or udp
 	Listener      net.Listener
+	SessionID     string
 	StopCh        chan struct{}
 }
 
@@ -28,18 +39,20 @@ type ContainerPorts struct {
 
 // PortForwardManager manages port forwards for all containers
 type PortForwardManager struct {
-	mu             sync.RWMutex
-	containers     map[*http.Request]*ContainerPorts // containerID -> ports
-	containerPorts map[string]*ContainerPorts        // containerID -> ports
-	sshClient      *SSHClient
+	mu                sync.RWMutex
+	containers        map[*http.Request]*ContainerPorts // httpPort -> ports
+	containerPorts    map[string]*ContainerPorts        // containerID -> ports
+	sshConfig         Config
+	mutagenForwardMgr *forwarding.Manager
 }
 
 // NewPortForwardManager creates a new port forward manager
-func NewPortForwardManager(sshClient *SSHClient) *PortForwardManager {
+func NewPortForwardManager(sshConfig Config, forwardingManager *forwarding.Manager) *PortForwardManager {
 	return &PortForwardManager{
-		containers:     make(map[*http.Request]*ContainerPorts),
-		containerPorts: make(map[string]*ContainerPorts),
-		sshClient:      sshClient,
+		containers:        make(map[*http.Request]*ContainerPorts),
+		containerPorts:    make(map[string]*ContainerPorts),
+		sshConfig:         sshConfig,
+		mutagenForwardMgr: forwardingManager,
 	}
 }
 
@@ -88,7 +101,7 @@ func (m *PortForwardManager) StorePortBindingsStart(req *http.Request, hostPorts
 	}
 }
 
-// StorePortBindingsEnd stores the port bindings for a container (before it's created)
+// StorePortBindingsEnd stores container id found from the container create request
 func (m *PortForwardManager) StorePortBindingsEnd(req *http.Request, containerID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -115,94 +128,325 @@ func (m *PortForwardManager) SetupForwards(containerID string) error {
 	log.Printf("Setting up port forwards for container %s", containerID)
 
 	for _, binding := range containerPorts.Bindings {
-		if err := m.setupSingleForward(binding); err != nil {
+		sessionID, err := m.setupSingleForward(containerID, binding)
+		if err != nil {
 			log.Printf("Failed to setup port forward %s: %v", binding.HostPort, err)
 			// Continue with other ports even if one fails
 		}
+		binding.SessionID = sessionID
 	}
 
 	return nil
+}
+
+// createConfiguration stores configuration for the create command.
+var createConfiguration struct {
+	// help indicates whether or not to show help information and exit.
+	help bool
+	// name is the name specification for the session.
+	name string
+	// labels are the label specifications for the session.
+	labels []string
+	// paused indicates whether or not to create the session in a pre-paused
+	// state.
+	paused bool
+	// noGlobalConfiguration specifies whether or not the global configuration
+	// file should be ignored.
+	noGlobalConfiguration bool
+	// configurationFiles stores paths of additional files from which to load
+	// default configuration.
+	configurationFiles []string
+	// socketOverwriteMode specifies the socket overwrite mode to use for the
+	// session.
+	socketOverwriteMode string
+	// socketOverwriteModeSource specifies the socket overwrite mode to use for
+	// the session, taking priority over socketOverwriteMode on source if
+	// specified.
+	socketOverwriteModeSource string
+	// socketOverwriteModeDestination specifies the socket overwrite mode to use
+	// for the session, taking priority over socketOverwriteMode on destination
+	// if specified.
+	socketOverwriteModeDestination string
+	// socketOwner specifies the socket owner identifier to use new Unix domain
+	// socket listeners, with endpoint-specific specifications taking priority.
+	socketOwner string
+	// socketOwnerSource specifies the socket owner identifier to use new Unix
+	// domain socket listeners, taking priority over socketOwner on source if
+	// specified.
+	socketOwnerSource string
+	// socketOwnerDestination specifies the socket owner identifier to use new
+	// Unix domain socket listeners, taking priority over socketOwner on
+	// destination if specified.
+	socketOwnerDestination string
+	// socketGroup specifies the socket owner identifier to use new Unix domain
+	// socket listeners, with endpoint-specific specifications taking priority.
+	socketGroup string
+	// socketGroupSource specifies the socket owner identifier to use new Unix
+	// domain socket listeners, taking priority over socketGroup on source if
+	// specified.
+	socketGroupSource string
+	// socketGroupDestination specifies the socket owner identifier to use new
+	// Unix domain socket listeners, taking priority over socketGroup on
+	// destination if specified.
+	socketGroupDestination string
+	// socketPermissionMode specifies the socket permission mode to use for new
+	// Unix domain socket listeners, with endpoint-specific specifications
+	// taking priority.
+	socketPermissionMode string
+	// socketPermissionModeSource specifies the socket permission mode to use
+	// for new Unix domain socket listeners on source, taking priority over
+	// socketPermissionMode on source if specified.
+	socketPermissionModeSource string
+	// socketPermissionModeDestination specifies the socket permission mode to
+	// use for new Unix domain socket listeners on destination, taking priority
+	// over socketPermissionMode on destination if specified.
+	socketPermissionModeDestination string
+}
+
+// loadAndValidateGlobalSynchronizationConfiguration loads a YAML-based global
+// configuration, extracts the forwarding component, converts it to a Protocol
+// Buffers session configuration, and validates it.
+func loadAndValidateGlobalForwardingConfiguration(path string) (*forwarding.Configuration, error) {
+	// Load the YAML configuration.
+	yamlConfiguration, err := global.LoadConfiguration(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert the YAML configuration to a Protocol Buffers representation and
+	// validate it.
+	configuration := yamlConfiguration.Forwarding.Defaults.ToInternal()
+	if err := configuration.EnsureValid(false); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	// Success.
+	return configuration, nil
 }
 
 // setupSingleForward sets up a single SSH port forward
-func (m *PortForwardManager) setupSingleForward(binding *PortBinding) error {
-	// Parse host port
-	hostPortInt, err := strconv.Atoi(binding.HostPort)
+func (m *PortForwardManager) setupSingleForward(containerID string, binding *PortBinding) (string, error) {
+	createConfiguration.name = fmt.Sprintf("forward-%s-%s", containerID[:8], binding.HostPort)
+	createConfiguration.labels = nil
+	createConfiguration.paused = false
+	createConfiguration.noGlobalConfiguration = false
+	createConfiguration.configurationFiles = nil
+
+	createConfiguration.socketOverwriteMode = ""
+	createConfiguration.socketOverwriteModeSource = ""
+	createConfiguration.socketOverwriteModeDestination = ""
+
+	createConfiguration.socketOwner = ""
+	createConfiguration.socketOwnerSource = ""
+	createConfiguration.socketOwnerDestination = ""
+
+	createConfiguration.socketGroup = ""
+	createConfiguration.socketGroupSource = ""
+	createConfiguration.socketGroupDestination = ""
+
+	createConfiguration.socketPermissionMode = ""
+	createConfiguration.socketPermissionModeSource = ""
+	createConfiguration.socketPermissionModeDestination = ""
+
+	// tcp:localhost:8080
+	//  george@example.org:24:tcp:localhost:8080
+	//
+	//Connect to example.org on a custom SSH port (24) as the user george and bind to or target the loopback interface on port 8080.
+
+	forwardSource := fmt.Sprintf("tcp:localhost:%s", binding.HostPort)
+	forwardDest := fmt.Sprintf("%s@%s:tcp:localhost:%s",
+		m.sshConfig.SSHUser, m.sshConfig.SSHHost, binding.HostPort)
+
+	source, err := url.Parse(forwardSource, url.Kind_Forwarding, true)
 	if err != nil {
-		return fmt.Errorf("invalid host port %s: %w", binding.HostPort, err)
+		return "", fmt.Errorf("invalid forwarding source: %w", err)
+	}
+	destination, err := url.Parse(forwardDest, url.Kind_Forwarding, true)
+	if err != nil {
+		return "", fmt.Errorf("invalid forwarding destination: %w", err)
 	}
 
-	// Listen on local port
-	localAddr := fmt.Sprintf("127.0.0.1:%d", hostPortInt)
-	listener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", localAddr, err)
+	// Validate the name.
+	if err := selection.EnsureNameValid(createConfiguration.name); err != nil {
+		return "", fmt.Errorf("invalid session name: %w", err)
 	}
 
-	binding.Listener = listener
-	log.Printf("✓ Port forward: localhost:%s -> remote container port %s/%s",
-		binding.HostPort, binding.ContainerPort, binding.Protocol)
-
-	// Start accepting connections
-	go m.acceptConnections(binding, listener)
-
-	return nil
-}
-
-// acceptConnections accepts connections and forwards them via SSH
-func (m *PortForwardManager) acceptConnections(binding *PortBinding, listener net.Listener) {
-	for {
-		select {
-		case <-binding.StopCh:
-			return
-		default:
+	// Parse, validate, and record labels.
+	labels := make(map[string]string)
+	for _, label := range createConfiguration.labels {
+		components := strings.SplitN(label, "=", 2)
+		var key, value string
+		key = components[0]
+		if len(components) == 2 {
+			value = components[1]
 		}
+		if err := selection.EnsureLabelKeyValid(key); err != nil {
+			return "", fmt.Errorf("invalid label key: %w", err)
+		} else if err := selection.EnsureLabelValueValid(value); err != nil {
+			return "", fmt.Errorf("invalid label value: %w", err)
+		}
+		labels[key] = value
+	}
+	labels["container-id"] = compressContainerID(containerID)
 
-		conn, err := listener.Accept()
+	// Create a default session configuration that will form the basis of our
+	// cumulative configuration.
+	configuration := &forwarding.Configuration{}
+
+	// Unless disabled, attempt to load configuration from the global
+	// configuration file and merge it into our cumulative configuration.
+	if !createConfiguration.noGlobalConfiguration {
+		// Compute the path to the global configuration file.
+		globalConfigurationPath, err := global.ConfigurationPath()
 		if err != nil {
-			select {
-			case <-binding.StopCh:
-				return
-			default:
-				log.Printf("Accept error on port %s: %v", binding.HostPort, err)
-				continue
-			}
+			return "", fmt.Errorf("unable to compute path to global configuration file: %w", err)
 		}
 
-		// Handle connection in goroutine
-		go m.handleForwardedConnection(conn, binding)
+		// Attempt to load the file. We allow it to not exist.
+		globalConfiguration, err := loadAndValidateGlobalForwardingConfiguration(globalConfigurationPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return "", fmt.Errorf("unable to load global configuration: %w", err)
+			}
+		} else {
+			configuration = forwarding.MergeConfigurations(configuration, globalConfiguration)
+		}
 	}
-}
 
-// handleForwardedConnection forwards a single connection via SSH
-func (m *PortForwardManager) handleForwardedConnection(localConn net.Conn, binding *PortBinding) {
-	defer localConn.Close()
-
-	// Dial the container port on the remote host via SSH
-	// Docker containers are accessible via localhost from the Docker host
-	remoteAddr := fmt.Sprintf("127.0.0.1:%s", binding.HostPort) // todo: using container IP address and port?
-	remoteConn, err := m.sshClient.Client().Dial("tcp", remoteAddr)
-	if err != nil {
-		log.Printf("Failed to dial remote %s: %v", remoteAddr, err)
-		return
+	// If additional default configuration files have been specified, then load
+	// them and merge them into the cumulative configuration.
+	for _, configurationFile := range createConfiguration.configurationFiles {
+		if c, err := loadAndValidateGlobalForwardingConfiguration(configurationFile); err != nil {
+			return "", fmt.Errorf("unable to load configuration file (%s): %w", configurationFile, err)
+		} else {
+			configuration = forwarding.MergeConfigurations(configuration, c)
+		}
 	}
-	defer remoteConn.Close()
 
-	// Bidirectional copy
-	done := make(chan struct{}, 2)
+	// Validate and convert socket overwrite mode specifications.
+	var socketOverwriteMode, socketOverwriteModeSource, socketOverwriteModeDestination forwarding.SocketOverwriteMode
+	if createConfiguration.socketOverwriteMode != "" {
+		if err := socketOverwriteMode.UnmarshalText([]byte(createConfiguration.socketOverwriteMode)); err != nil {
+			return "", fmt.Errorf("unable to socket overwrite mode: %w", err)
+		}
+	}
+	if createConfiguration.socketOverwriteModeSource != "" {
+		if err := socketOverwriteModeSource.UnmarshalText([]byte(createConfiguration.socketOverwriteModeSource)); err != nil {
+			return "", fmt.Errorf("unable to socket overwrite mode for source: %w", err)
+		}
+	}
+	if createConfiguration.socketOverwriteModeDestination != "" {
+		if err := socketOverwriteModeDestination.UnmarshalText([]byte(createConfiguration.socketOverwriteModeDestination)); err != nil {
+			return "", fmt.Errorf("unable to socket overwrite mode for destination: %w", err)
+		}
+	}
 
-	go func() {
-		io.Copy(remoteConn, localConn)
-		done <- struct{}{}
-	}()
+	// Validate socket owner specifications.
+	if createConfiguration.socketOwner != "" {
+		if kind, _ := filesystem.ParseOwnershipIdentifier(
+			createConfiguration.socketOwner,
+		); kind == filesystem.OwnershipIdentifierKindInvalid {
+			return "", errors.New("invalid socket ownership specification")
+		}
+	}
+	if createConfiguration.socketOwnerSource != "" {
+		if kind, _ := filesystem.ParseOwnershipIdentifier(
+			createConfiguration.socketOwnerSource,
+		); kind == filesystem.OwnershipIdentifierKindInvalid {
+			return "", errors.New("invalid socket ownership specification for source")
+		}
+	}
+	if createConfiguration.socketOwnerDestination != "" {
+		if kind, _ := filesystem.ParseOwnershipIdentifier(
+			createConfiguration.socketOwnerDestination,
+		); kind == filesystem.OwnershipIdentifierKindInvalid {
+			return "", errors.New("invalid socket ownership specification for destination")
+		}
+	}
 
-	go func() {
-		io.Copy(localConn, remoteConn)
-		done <- struct{}{}
-	}()
+	// Validate socket group specifications.
+	if createConfiguration.socketGroup != "" {
+		if kind, _ := filesystem.ParseOwnershipIdentifier(
+			createConfiguration.socketGroup,
+		); kind == filesystem.OwnershipIdentifierKindInvalid {
+			return "", errors.New("invalid socket group specification")
+		}
+	}
+	if createConfiguration.socketGroupSource != "" {
+		if kind, _ := filesystem.ParseOwnershipIdentifier(
+			createConfiguration.socketGroupSource,
+		); kind == filesystem.OwnershipIdentifierKindInvalid {
+			return "", errors.New("invalid socket group specification for source")
+		}
+	}
+	if createConfiguration.socketGroupDestination != "" {
+		if kind, _ := filesystem.ParseOwnershipIdentifier(
+			createConfiguration.socketGroupDestination,
+		); kind == filesystem.OwnershipIdentifierKindInvalid {
+			return "", errors.New("invalid socket group specification for destination")
+		}
+	}
 
-	// Wait for one direction to finish
-	<-done
+	// Validate and convert socket permission mode specifications.
+	var socketPermissionMode, socketPermissionModeSource, socketPermissionModeDestination filesystem.Mode
+	if createConfiguration.socketPermissionMode != "" {
+		if err := socketPermissionMode.UnmarshalText([]byte(createConfiguration.socketPermissionMode)); err != nil {
+			return "", fmt.Errorf("unable to parse socket permission mode: %w", err)
+		}
+	}
+	if createConfiguration.socketPermissionModeSource != "" {
+		if err := socketPermissionModeSource.UnmarshalText([]byte(createConfiguration.socketPermissionModeSource)); err != nil {
+			return "", fmt.Errorf("unable to parse socket permission mode for source: %w", err)
+		}
+	}
+	if createConfiguration.socketPermissionModeDestination != "" {
+		if err := socketPermissionModeDestination.UnmarshalText([]byte(createConfiguration.socketPermissionModeDestination)); err != nil {
+			return "", fmt.Errorf("unable to parse socket permission mode for destination: %w", err)
+		}
+	}
+
+	// Create the command line configuration and merge it into our cumulative
+	// configuration.
+	configuration = forwarding.MergeConfigurations(configuration, &forwarding.Configuration{
+		SocketOverwriteMode:  socketOverwriteMode,
+		SocketOwner:          createConfiguration.socketOwner,
+		SocketGroup:          createConfiguration.socketGroup,
+		SocketPermissionMode: uint32(socketPermissionMode),
+	})
+
+	// Create the creation specification.
+	specification := &forwardingsvc.CreationSpecification{
+		Source:        source,
+		Destination:   destination,
+		Configuration: configuration,
+		ConfigurationSource: &forwarding.Configuration{
+			SocketOverwriteMode:  socketOverwriteModeSource,
+			SocketOwner:          createConfiguration.socketOwnerSource,
+			SocketGroup:          createConfiguration.socketGroupSource,
+			SocketPermissionMode: uint32(socketPermissionModeSource),
+		},
+		ConfigurationDestination: &forwarding.Configuration{
+			SocketOverwriteMode:  socketOverwriteModeDestination,
+			SocketOwner:          createConfiguration.socketOwnerDestination,
+			SocketGroup:          createConfiguration.socketGroupDestination,
+			SocketPermissionMode: uint32(socketPermissionModeDestination),
+		},
+		Name:   createConfiguration.name,
+		Labels: labels,
+		Paused: createConfiguration.paused,
+	}
+
+	session, err := m.mutagenForwardMgr.Create(context.Background(), specification.Source,
+		specification.Destination,
+		specification.Configuration,
+		specification.ConfigurationSource,
+		specification.ConfigurationDestination,
+		specification.Name,
+		specification.Labels,
+		specification.Paused,
+		"",
+	)
+	return session, nil
 }
 
 // TeardownForwards tears down port forwards for a container
@@ -223,6 +467,17 @@ func (m *PortForwardManager) TeardownForwards(containerID string) {
 			binding.Listener.Close()
 			log.Printf("✗ Closed port forward: localhost:%s", binding.HostPort)
 		}
+
+	}
+
+	selected := &selection.Selection{
+		All:            false,
+		Specifications: []string{},
+		LabelSelector:  fmt.Sprintf("container-id=%s", compressContainerID(containerID)),
+	}
+	err := m.mutagenForwardMgr.Terminate(context.Background(), selected, "")
+	if err != nil {
+		log.Printf("Error terminating port forwards: %s", err)
 	}
 
 	delete(m.containerPorts, containerID)
@@ -241,7 +496,31 @@ func (m *PortForwardManager) TeardownAll() {
 			if binding.Listener != nil {
 				binding.Listener.Close()
 			}
+
+			selected := &selection.Selection{
+				All:            true,
+				Specifications: []string{},
+				LabelSelector:  "",
+			}
+			err := m.mutagenForwardMgr.Terminate(context.Background(), selected, "")
+			if err != nil {
+				log.Printf("Error terminating port forwards: %s", err)
+			}
 		}
 		delete(m.containerPorts, containerID)
 	}
+}
+
+func compressContainerID(rawContainerId string) string {
+	bytes, err := hex.DecodeString(rawContainerId)
+	if err != nil {
+		panic(fmt.Sprintf("Could not compress container ID: %s", rawContainerId))
+	}
+
+	base64Str := base64.StdEncoding.EncodeToString(bytes)
+	// mutagen allows these chars, so we use them to make sure the converted value is able to convert back to base64
+	base64Str = strings.ReplaceAll(base64Str, "=", "-")
+	base64Str = strings.ReplaceAll(base64Str, "+", "_")
+	base64Str = strings.ReplaceAll(base64Str, "/", ".")
+	return base64Str + "0" // make sure the value ends with a number
 }
