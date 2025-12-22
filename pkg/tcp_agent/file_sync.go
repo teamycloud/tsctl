@@ -134,7 +134,7 @@ func (m *FileSyncManager) StoreBindMountsEnd(req *http.Request, containerID stri
 }
 
 // SetupSyncs sets up file synchronization sessions for a container
-func (m *FileSyncManager) SetupSyncs(containerID string) error {
+func (m *FileSyncManager) SetupSyncs(containerID string, promptIdentifier string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -147,7 +147,7 @@ func (m *FileSyncManager) SetupSyncs(containerID string) error {
 	log.Printf("Setting up file syncs for container %s", containerID)
 
 	for _, mount := range containerMounts.Mounts {
-		sessionID, err := m.setupSingleSync(containerID, mount)
+		sessionID, err := m.setupSingleSync(containerID, mount, promptIdentifier)
 		if err != nil {
 			log.Printf("Failed to setup file sync %s: %v", mount.HostPath, err)
 			// Continue with other mounts even if one fails
@@ -328,7 +328,7 @@ func loadAndValidateGlobalSynchronizationConfiguration(path string) (*synchroniz
 }
 
 // setupSingleSync sets up a single file synchronization session
-func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount) (string, error) {
+func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, promptIdentifier string) (string, error) {
 	fsCreateConfiguration.help = false
 	fsCreateConfiguration.name = fmt.Sprintf("sync-%s-%s", containerID[:8], filepath.Base(mount.HostPath))
 	fsCreateConfiguration.labels = nil
@@ -395,9 +395,9 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount) 
 
 	// Destination: remote path via SSH
 	// user@example.org:23:relative/path
-	// The path will be something like /opt/container-mount-sync/{containerID}/{host-path}
+	// The path will be something like /opt/container-mount-sync/{host-path}
 	// todo: support Windows paths test long paths
-	remotePath := fmt.Sprintf("%s/%s%s", SyncBasePath, containerID, mount.HostPath)
+	remotePath := fmt.Sprintf("%s%s", SyncBasePath, mount.HostPath)
 	syncDest := fmt.Sprintf("%s@%s:%s",
 		m.sshConfig.SSHUser, m.sshConfig.SSHHost, remotePath)
 	beta, err := url.Parse(syncDest, url.Kind_Synchronization, true)
@@ -798,7 +798,7 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount) 
 		specification.Name,
 		specification.Labels,
 		specification.Paused,
-		"",
+		promptIdentifier,
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to create sync session: %w", err)

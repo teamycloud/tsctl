@@ -13,7 +13,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mutagen-io/mutagen/cmd"
 	"github.com/mutagen-io/mutagen/pkg/forwarding"
+	"github.com/mutagen-io/mutagen/pkg/identifier"
+	"github.com/mutagen-io/mutagen/pkg/prompting"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
 )
 
@@ -34,14 +37,16 @@ var (
 // TCPProxy implements a transparent TCP proxy that forwards connections
 // through an SSH tunnel to a remote Docker daemon
 type TCPProxy struct {
-	cfg              Config              `json:"cfg"`
-	sshClient        *SSHClient          `json:"ssh_client,omitempty"`
-	portForwardMgr   *PortForwardManager `json:"port_forward_mgr,omitempty"`
-	fileSyncMgr      *FileSyncManager    `json:"file_sync_mgr,omitempty"`
-	listener         net.Listener        `json:"listener,omitempty"`
-	wg               sync.WaitGroup      `json:"wg"`
-	stopCh           chan struct{}       `json:"stop_ch,omitempty"`
-	containerIDCache sync.Map            `json:"-"` // Cache for *http.Request -> containerID mapping
+	cfg              Config                  `json:"cfg"`
+	sshClient        *SSHClient              `json:"ssh_client,omitempty"`
+	portForwardMgr   *PortForwardManager     `json:"port_forward_mgr,omitempty"`
+	fileSyncMgr      *FileSyncManager        `json:"file_sync_mgr,omitempty"`
+	listener         net.Listener            `json:"listener,omitempty"`
+	wg               sync.WaitGroup          `json:"wg"`
+	prompter         *cmd.StatusLinePrompter `json:"prompter"`
+	promptIdentifier string                  `json:"promptIdentifier"`
+	stopCh           chan struct{}           `json:"stop_ch,omitempty"`
+	containerIDCache sync.Map                `json:"-"` // Cache for *http.Request -> containerID mapping
 }
 
 // NewTCPProxy creates a new TCP proxy instance and establishes SSH connection
@@ -52,6 +57,20 @@ func NewTCPProxy(cfg Config, forwardingManager *forwarding.Manager, synchronizat
 		return nil, fmt.Errorf("create ssh client: %w", err)
 	}
 
+	prompter := &cmd.StatusLinePrompter{Printer: &cmd.StatusLinePrinter{}}
+	// Create a unique identifier for the prompter.
+	promptIdentifier, err := identifier.New(identifier.PrefixPrompter)
+	if err != nil {
+		return nil, fmt.Errorf("unable to generate prompter identifier: %w", err)
+	}
+
+	// Register the prompter.
+	if err := prompting.RegisterPrompterWithIdentifier(promptIdentifier, prompter); err != nil {
+		return nil, fmt.Errorf("unable to register prompter: %w", err)
+	}
+
+	// todo: detect if existing sessions still apply
+
 	// Create port forward manager
 	portForwardMgr := NewPortForwardManager(cfg, forwardingManager)
 
@@ -59,11 +78,13 @@ func NewTCPProxy(cfg Config, forwardingManager *forwarding.Manager, synchronizat
 	fileSyncMgr := NewFileSyncManager(cfg, synchronizationManager)
 
 	return &TCPProxy{
-		cfg:            cfg,
-		sshClient:      sshClient,
-		portForwardMgr: portForwardMgr,
-		fileSyncMgr:    fileSyncMgr,
-		stopCh:         make(chan struct{}),
+		cfg:              cfg,
+		sshClient:        sshClient,
+		prompter:         prompter,
+		promptIdentifier: promptIdentifier,
+		portForwardMgr:   portForwardMgr,
+		fileSyncMgr:      fileSyncMgr,
+		stopCh:           make(chan struct{}),
 	}, nil
 }
 
@@ -268,10 +289,10 @@ func (p *TCPProxy) handleContainerOperationResponse(req *http.Request, resp *htt
 			if len(matches) > 1 {
 				containerID := matches[1]
 				log.Printf("Container start detected: %s", containerID)
-				if err := p.portForwardMgr.SetupForwards(containerID); err != nil {
+				if err := p.portForwardMgr.SetupForwards(containerID, p.promptIdentifier); err != nil {
 					log.Printf("Failed to setup port forwards for %s: %v", containerID, err)
 				}
-				if err := p.fileSyncMgr.SetupSyncs(containerID); err != nil {
+				if err := p.fileSyncMgr.SetupSyncs(containerID, p.promptIdentifier); err != nil {
 					log.Printf("Failed to setup file syncs for %s: %v", containerID, err)
 				}
 			}
@@ -427,8 +448,9 @@ func rewriteBindMount(bind string, basePath string) string {
 	// parts[1] = target (container path)
 	// parts[2+] = optional flags (e.g., "ro")
 
+	source := parts[0]
 	target := parts[1]
-	newSource := fmt.Sprintf("%s%s", basePath, target)
+	newSource := fmt.Sprintf("%s%s", basePath, source)
 
 	if len(parts) == 2 {
 		return fmt.Sprintf("%s:%s", newSource, target)

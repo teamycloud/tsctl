@@ -115,7 +115,7 @@ func (m *PortForwardManager) StorePortBindingsEnd(req *http.Request, containerID
 }
 
 // SetupForwards sets up SSH port forwards for a container
-func (m *PortForwardManager) SetupForwards(containerID string) error {
+func (m *PortForwardManager) SetupForwards(containerID string, promptIdentifier string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -128,7 +128,7 @@ func (m *PortForwardManager) SetupForwards(containerID string) error {
 	log.Printf("Setting up port forwards for container %s", containerID)
 
 	for _, binding := range containerPorts.Bindings {
-		sessionID, err := m.setupSingleForward(containerID, binding)
+		sessionID, err := m.setupSingleForward(containerID, binding, promptIdentifier)
 		if err != nil {
 			log.Printf("Failed to setup port forward %s: %v", binding.HostPort, err)
 			// Continue with other ports even if one fails
@@ -225,7 +225,7 @@ func loadAndValidateGlobalForwardingConfiguration(path string) (*forwarding.Conf
 }
 
 // setupSingleForward sets up a single SSH port forward
-func (m *PortForwardManager) setupSingleForward(containerID string, binding *PortBinding) (string, error) {
+func (m *PortForwardManager) setupSingleForward(containerID string, binding *PortBinding, promptIdentifier string) (string, error) {
 	pfCreateConfiguration.name = fmt.Sprintf("forward-%s-%s", containerID[:8], binding.HostPort)
 	pfCreateConfiguration.labels = nil
 	pfCreateConfiguration.paused = false
@@ -439,7 +439,7 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 		specification.Name,
 		specification.Labels,
 		specification.Paused,
-		"",
+		promptIdentifier,
 	)
 	return session, nil
 }
