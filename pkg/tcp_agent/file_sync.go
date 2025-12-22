@@ -63,6 +63,7 @@ func (m *FileSyncManager) StoreBindMountsStart(req *http.Request, binds []string
 	defer m.mu.Unlock()
 
 	mounts := make([]*BindMount, 0)
+	mountNameMap := make(map[string]*BindMount)
 	for _, bind := range binds {
 		// Parse bind mount syntax: /host/path:/container/path[:ro]
 		parts := strings.Split(bind, ":")
@@ -92,11 +93,21 @@ func (m *FileSyncManager) StoreBindMountsStart(req *http.Request, binds []string
 			continue
 		}
 
+		if existing, ok := mountNameMap[absHostPath]; ok {
+			if existing.ReadOnly && !readOnly {
+				existing.ReadOnly = false
+			}
+
+			// for one host path, we at most setup one sync
+			continue
+		}
+
 		mount := &BindMount{
 			HostPath:      absHostPath,
 			ContainerPath: containerPath,
 			ReadOnly:      readOnly,
 		}
+		mountNameMap[absHostPath] = mount
 		mounts = append(mounts, mount)
 		log.Printf("Stored bind mount: %s -> %s (ro=%v)", absHostPath, containerPath, readOnly)
 	}
@@ -384,8 +395,9 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount) 
 
 	// Destination: remote path via SSH
 	// user@example.org:23:relative/path
-	// The path will be something like /opt/remote-docker-agent/{containerID}/{mount-path}
-	remotePath := fmt.Sprintf("/opt/remote-docker-agent/%s%s", containerID, mount.ContainerPath)
+	// The path will be something like /opt/container-mount-sync/{containerID}/{host-path}
+	// todo: support Windows paths test long paths
+	remotePath := fmt.Sprintf("%s/%s%s", SyncBasePath, containerID, mount.HostPath)
 	syncDest := fmt.Sprintf("%s@%s:%s",
 		m.sshConfig.SSHUser, m.sshConfig.SSHHost, remotePath)
 	beta, err := url.Parse(syncDest, url.Kind_Synchronization, true)

@@ -87,7 +87,7 @@ Starting TCP proxy with SSH transport...
 	if err != nil {
 		log.Fatalf("Failed to create TCP proxy: %v", err)
 	}
-	defer proxy.Close()
+	//defer proxy.Close()
 
 	go func() {
 		errCh <- proxy.ListenAndServe()
@@ -108,6 +108,7 @@ Starting TCP proxy with SSH transport...
 	select {
 	case <-sigCh:
 		log.Println("Shutting down gracefully...")
+		proxy.Close()
 	case err := <-errCh:
 		if err != nil {
 			log.Fatalf("Proxy error: %v", err)

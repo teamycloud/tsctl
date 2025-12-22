@@ -10,7 +10,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
-	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/mutagen-io/mutagen/pkg/forwarding"
@@ -18,14 +18,15 @@ import (
 )
 
 var (
+	fullContainerIDPattern = regexp.MustCompile(`^([a-f0-9]{64})$`)
 	// Pattern to match /containers/create
 	containerCreatePattern = regexp.MustCompile(`^/v[\d.]+/containers/create$`)
 	// Pattern to match /containers/{id}/start
 	containerStartPattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-f0-9]+)/start$`)
 	// Pattern to match /containers/{id}/stop
-	containerStopPattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-f0-9]+)/stop$`)
+	containerStopPattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-zA-Z0-9][a-zA-Z0-9_.-]+)/stop$`)
 	// Pattern to match DELETE /containers/{id}
-	containerRemovePattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-f0-9]+)$`)
+	containerRemovePattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-zA-Z0-9][a-zA-Z0-9_.-]+)$`)
 	// Pattern to match /containers/{id}/wait - long-running request that completes when container exits
 	containerWaitPattern = regexp.MustCompile(`^/v[\d.]+/containers/([a-f0-9]+)/wait`)
 )
@@ -33,14 +34,14 @@ var (
 // TCPProxy implements a transparent TCP proxy that forwards connections
 // through an SSH tunnel to a remote Docker daemon
 type TCPProxy struct {
-	cfg            Config
-	sshClient      *SSHClient
-	portForwardMgr *PortForwardManager
-	fileSyncMgr    *FileSyncManager
-	mutagenSyncMgr *synchronization.Manager
-	listener       net.Listener
-	wg             sync.WaitGroup
-	stopCh         chan struct{}
+	cfg              Config              `json:"cfg"`
+	sshClient        *SSHClient          `json:"ssh_client,omitempty"`
+	portForwardMgr   *PortForwardManager `json:"port_forward_mgr,omitempty"`
+	fileSyncMgr      *FileSyncManager    `json:"file_sync_mgr,omitempty"`
+	listener         net.Listener        `json:"listener,omitempty"`
+	wg               sync.WaitGroup      `json:"wg"`
+	stopCh           chan struct{}       `json:"stop_ch,omitempty"`
+	containerIDCache sync.Map            `json:"-"` // Cache for *http.Request -> containerID mapping
 }
 
 // NewTCPProxy creates a new TCP proxy instance and establishes SSH connection
@@ -62,7 +63,6 @@ func NewTCPProxy(cfg Config, forwardingManager *forwarding.Manager, synchronizat
 		sshClient:      sshClient,
 		portForwardMgr: portForwardMgr,
 		fileSyncMgr:    fileSyncMgr,
-		mutagenSyncMgr: synchronizationManager,
 		stopCh:         make(chan struct{}),
 	}, nil
 }
@@ -181,6 +181,7 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 					if p.isContainerStopped(containerID) {
 						log.Printf("Container confirmed stopped: %s, tearing down port forwards", containerID)
 						p.portForwardMgr.TeardownForwards(containerID)
+						p.fileSyncMgr.TeardownSyncs(containerID)
 					} else {
 						log.Printf("Container still running: %s, keeping port forwards active", containerID)
 					}
@@ -226,24 +227,29 @@ func (p *TCPProxy) handleContainerOperation(req *http.Request) {
 		p.handleContainerCreateRequest(req)
 	}
 
-	// Handle container stop/remove - tear down port forwards
-	if req.Method == http.MethodPost && containerStopPattern.MatchString(req.URL.Path) {
-		matches := containerStopPattern.FindStringSubmatch(req.URL.Path)
-		if len(matches) > 1 {
-			containerID := matches[1]
-			log.Printf("Container stop detected: %s", containerID)
-			p.portForwardMgr.TeardownForwards(containerID)
-			p.fileSyncMgr.TeardownSyncs(containerID)
-		}
-	}
-
+	// Handle container remove - resolve and cache container ID BEFORE the request is sent
+	// This is necessary because the container might be deleted after the request
 	if req.Method == http.MethodDelete && containerRemovePattern.MatchString(req.URL.Path) {
 		matches := containerRemovePattern.FindStringSubmatch(req.URL.Path)
 		if len(matches) > 1 {
-			containerID := matches[1]
-			log.Printf("Container remove detected: %s", containerID)
-			p.portForwardMgr.TeardownForwards(containerID)
-			p.fileSyncMgr.TeardownSyncs(containerID)
+			containerIDOrName := matches[1]
+			// Extract API version from the request path
+			apiVersion := extractAPIVersion(req.URL.Path)
+
+			// Resolve the container ID now, before it gets deleted
+			var fullContainerID string
+			if fullContainerIDPattern.MatchString(containerIDOrName) {
+				fullContainerID = containerIDOrName
+			} else {
+				// Query the container ID from Docker API
+				fullContainerID = p.getContainerID(apiVersion, containerIDOrName)
+			}
+
+			if fullContainerID != "" {
+				// Cache the container ID for later use in the response handler
+				p.containerIDCache.Store(req, fullContainerID)
+				log.Printf("Cached container ID %s for remove request (original: %s)", fullContainerID, containerIDOrName)
+			}
 		}
 	}
 }
@@ -271,6 +277,166 @@ func (p *TCPProxy) handleContainerOperationResponse(req *http.Request, resp *htt
 			}
 		}
 	}
+
+	// Handle container stop - tear down port forwards
+	// Stop is safe to resolve async since container still exists after stop
+	if req.Method == http.MethodPost && containerStopPattern.MatchString(req.URL.Path) {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			matches := containerStopPattern.FindStringSubmatch(req.URL.Path)
+			if len(matches) > 1 {
+				containerIDOrName := matches[1]
+				log.Printf("Container stop detected: %s", containerIDOrName)
+				go p.teardownForContainer(resp.Header["Api-Version"][0], containerIDOrName)
+			}
+		}
+	}
+
+	// Handle container remove - use cached container ID
+	if req.Method == http.MethodDelete && containerRemovePattern.MatchString(req.URL.Path) {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// Retrieve cached container ID
+			if cachedID, ok := p.containerIDCache.LoadAndDelete(req); ok {
+				if containerID, ok := cachedID.(string); ok {
+					log.Printf("Container remove detected, using cached ID: %s", containerID)
+					go p.teardownForContainer("", containerID)
+				}
+			} else {
+				// Fallback: try to resolve (though this might fail if container is already removed)
+				matches := containerRemovePattern.FindStringSubmatch(req.URL.Path)
+				if len(matches) > 1 {
+					containerIDOrName := matches[1]
+					if fullContainerIDPattern.MatchString(matches[1]) {
+						log.Printf("Container remove detected (no cache): %s", containerIDOrName)
+						go p.teardownForContainer(resp.Header["Api-Version"][0], containerIDOrName)
+					}
+				}
+			}
+		}
+
+		p.containerIDCache.Delete(req)
+	}
+}
+
+func (p *TCPProxy) teardownForContainer(apiVersion string, containerIDOrName string) {
+	// If it's already a full container ID, teardown directly
+	if fullContainerIDPattern.MatchString(containerIDOrName) {
+		p.portForwardMgr.TeardownForwards(containerIDOrName)
+		p.fileSyncMgr.TeardownSyncs(containerIDOrName)
+		return
+	}
+
+	// Fetch actual container ID by inspecting the container
+	containerID := p.getContainerID(apiVersion, containerIDOrName)
+	if containerID == "" {
+		log.Printf("Failed to get container ID for %s, skipping teardown", containerIDOrName)
+		return
+	}
+
+	log.Printf("Resolved container name/short ID %s to full ID %s", containerIDOrName, containerID)
+	p.portForwardMgr.TeardownForwards(containerID)
+	p.fileSyncMgr.TeardownSyncs(containerID)
+}
+
+// extractAPIVersion extracts the API version from a Docker API request path
+// e.g., "/v1.45/containers/abc/remove" -> "1.45"
+func extractAPIVersion(path string) string {
+	// Match pattern like /v1.45/...
+	pattern := regexp.MustCompile(`^/v([\d.]+)/`)
+	matches := pattern.FindStringSubmatch(path)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	// Default to 1.45 if not found
+	return "1.45"
+}
+
+// getContainerID fetches the full container ID from Docker API given a name or short ID
+func (p *TCPProxy) getContainerID(apiVersion string, containerIDOrName string) string {
+	// Create a new connection to query container info
+	conn, err := p.sshClient.DialRemoteDocker()
+	if err != nil {
+		log.Printf("Failed to dial remote Docker for container ID lookup: %v", err)
+		return ""
+	}
+	defer conn.Close()
+
+	// Build the inspect request
+	requestPath := fmt.Sprintf("/v%s/containers/%s/json", apiVersion, containerIDOrName)
+	req, err := http.NewRequest("GET", requestPath, nil)
+	if err != nil {
+		log.Printf("Failed to create container inspect request: %v", err)
+		return ""
+	}
+	req.Host = "docker.example.com"
+	req.Header.Set("User-Agent", "docker-proxy")
+
+	// Send the request
+	if err := req.Write(conn); err != nil {
+		log.Printf("Failed to send container inspect request: %v", err)
+		return ""
+	}
+
+	// Read the response
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		log.Printf("Failed to read container inspect response: %v", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != 200 {
+		log.Printf("Container inspect returned status %d for %s (container may not exist)", resp.StatusCode, containerIDOrName)
+		return ""
+	}
+
+	// Parse the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read container inspect response body: %v", err)
+		return ""
+	}
+
+	// Parse JSON to get container ID
+	var inspectResp struct {
+		Id string `json:"Id"`
+	}
+
+	if err := json.Unmarshal(body, &inspectResp); err != nil {
+		log.Printf("Failed to parse container inspect response: %v", err)
+		return ""
+	}
+
+	return inspectResp.Id
+}
+
+const SyncBasePath = "/opt/container-mount-sync"
+
+// rewriteBindMount rewrites a bind mount string by replacing the host path with a remote sync path
+// Input format: "source:target[:ro]"
+// Output format: "/opt/container-mount-sync/target:target[:ro]"
+func rewriteBindMount(bind string, basePath string) string {
+	parts := strings.Split(bind, ":")
+	if len(parts) < 2 {
+		// Invalid format, return as-is
+		return bind
+	}
+
+	// parts[0] = source (host path)
+	// parts[1] = target (container path)
+	// parts[2+] = optional flags (e.g., "ro")
+
+	target := parts[1]
+	newSource := fmt.Sprintf("%s%s", basePath, target)
+
+	if len(parts) == 2 {
+		return fmt.Sprintf("%s:%s", newSource, target)
+	} else {
+		// Preserve any additional flags
+		flags := strings.Join(parts[2:], ":")
+		return fmt.Sprintf("%s:%s:%s", newSource, target, flags)
+	}
 }
 
 // handleContainerCreate extracts port bindings from container create request and stores them
@@ -280,8 +446,10 @@ func (p *TCPProxy) handleContainerCreateRequest(req *http.Request) {
 
 	defer func() {
 		if replacedReqBody != nil {
-			req.Header.Set("Content-Length", strconv.Itoa(len(replacedReqBody)))
 			req.Body = io.NopCloser(bytes.NewReader(replacedReqBody))
+			//req.Header.Set("Content-Length", strconv.Itoa(len(replacedReqBody)))
+			req.ContentLength = int64(len(replacedReqBody))
+			req.Header.Del("Content-Length")
 		} else if originalReqBody != nil {
 			req.Body = io.NopCloser(bytes.NewReader(originalReqBody))
 		}
@@ -303,7 +471,13 @@ func (p *TCPProxy) handleContainerCreateRequest(req *http.Request) {
 				HostIp   string `json:"HostIp"`
 				HostPort string `json:"HostPort"`
 			} `json:"PortBindings"`
-			Binds []string `json:"Binds"`
+			Binds  []string `json:"Binds"`
+			Mounts []struct {
+				Type     string `json:"Type"`
+				Source   string `json:"Source"`
+				Target   string `json:"Target"`
+				ReadOnly bool   `json:"ReadOnly,omitempty"`
+			} `json:"Mounts"`
 		} `json:"HostConfig"`
 	}
 
@@ -331,14 +505,120 @@ func (p *TCPProxy) handleContainerCreateRequest(req *http.Request) {
 		p.portForwardMgr.StorePortBindingsStart(req, portBindings)
 	}
 
-	// Extract bind mounts
+	mounts := make([]string, 0)
 	if len(createReq.HostConfig.Binds) > 0 {
-		log.Printf("Bind mounts found: %v", createReq.HostConfig.Binds)
-		p.fileSyncMgr.StoreBindMountsStart(req, createReq.HostConfig.Binds)
+		mounts = append(mounts, createReq.HostConfig.Binds...)
+		// insert SyncBasePath into the Binds
+	}
+	if len(createReq.HostConfig.Mounts) > 0 {
+		for _, mount := range createReq.HostConfig.Mounts {
+			if mount.Type == "bind" {
+				m := fmt.Sprintf("%s:%s", mount.Source, mount.Target)
+				if mount.ReadOnly {
+					m = fmt.Sprintf("%s:ro", m)
+				}
+				mounts = append(mounts, m)
+			}
+		}
+		// insert SyncBasePath into the Mounts
+	}
+
+	if len(mounts) > 0 {
+		log.Printf("Bind mounts found: %d mounts", len(mounts))
+		p.fileSyncMgr.StoreBindMountsStart(req, mounts)
+
+		// Rewrite mount paths in the request body using generic map manipulation
+		// to preserve all unknown fields
+		var createReqMap map[string]interface{}
+		if err := json.Unmarshal(originalReqBody, &createReqMap); err != nil {
+			log.Printf("Failed to parse request for mount rewriting: %v", err)
+		} else {
+			needsRewrite := false
+
+			if hostConfig, ok := createReqMap["HostConfig"].(map[string]interface{}); ok {
+				// Rewrite HostConfig.Binds (string array format)
+				if binds, ok := hostConfig["Binds"].([]interface{}); ok && len(binds) > 0 {
+					newBinds := make([]interface{}, 0, len(binds))
+					for _, bindIface := range binds {
+						if bind, ok := bindIface.(string); ok {
+							newBind := rewriteBindMount(bind, SyncBasePath)
+							newBinds = append(newBinds, newBind)
+							if newBind != bind {
+								needsRewrite = true
+								log.Printf("Rewriting bind mount: %s -> %s", bind, newBind)
+							}
+						}
+					}
+					hostConfig["Binds"] = newBinds
+				}
+
+				// Rewrite HostConfig.Mounts (object array format)
+				if mountsArray, ok := hostConfig["Mounts"].([]interface{}); ok && len(mountsArray) > 0 {
+					for _, mountIface := range mountsArray {
+						if mount, ok := mountIface.(map[string]interface{}); ok {
+							mountType, _ := mount["Type"].(string)
+							if mountType == "bind" {
+								source, _ := mount["Source"].(string)
+								target, _ := mount["Target"].(string)
+
+								if source != "" && target != "" {
+									newSource := fmt.Sprintf("%s%s", SyncBasePath, source)
+									if newSource != source {
+										mount["Source"] = newSource
+										needsRewrite = true
+										log.Printf("Rewriting mount source: %s -> %s", source, newSource)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Marshal back if we made changes
+			if needsRewrite {
+				modifiedBody, err := json.Marshal(createReqMap)
+				if err != nil {
+					log.Printf("Failed to marshal modified request: %v", err)
+				} else {
+					replacedReqBody = modifiedBody
+					log.Printf("Request body rewritten with sync base path modifications")
+				}
+			}
+		}
 	}
 }
 
+type ContainerResponse struct {
+	Id       string   `json:"Id,omitempty"`
+	Warnings []string `json:"Warnings,omitempty"`
+	Message  string   `json:"Message,omitempty"`
+}
+
 // handleContainerCreate extracts port bindings from container create request and stores them
+func dumpContainerResponseAndWrite(resp *http.Response) (*ContainerResponse, error) {
+	// Read response body to get container ID
+	var respBody bytes.Buffer
+	if resp.Body != nil {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			resp.Body = io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf("Internal agent error: %v", err))))
+			return nil, err
+		}
+
+		respBody.Write(body)
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+
+		respObj := ContainerResponse{}
+		if err := json.Unmarshal(respBody.Bytes(), &respObj); err != nil {
+			return nil, err
+		}
+		return &respObj, nil
+	}
+
+	// empty response body
+	return nil, nil
+}
 func (p *TCPProxy) handleContainerCreateResponse(req *http.Request, resp *http.Response) {
 	if resp.StatusCode != 201 {
 		log.Printf("Container create detected with unexpected status code: %d", resp.StatusCode)
@@ -347,22 +627,11 @@ func (p *TCPProxy) handleContainerCreateResponse(req *http.Request, resp *http.R
 		return
 	}
 
-	// Read response body to get container ID
-	var respBody bytes.Buffer
-	if resp.Body != nil {
-		body, _ := io.ReadAll(resp.Body)
-		respBody.Write(body)
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-	}
-
-	// Parse response JSON to get container ID
-	var createResp struct {
-		Id       string   `json:"Id"`
-		Warnings []string `json:"Warnings"`
-	}
-
-	if err := json.Unmarshal(respBody.Bytes(), &createResp); err != nil {
-		log.Printf("Failed to parse container create response: %v", err)
+	createResp, err := dumpContainerResponseAndWrite(resp)
+	if err != nil || createResp == nil {
+		if err != nil {
+			log.Printf("Failed to get container create response: %v", err)
+		}
 		p.portForwardMgr.StorePortBindingsEnd(req, "")
 		p.fileSyncMgr.StoreBindMountsEnd(req, "")
 		return
@@ -499,6 +768,7 @@ func (p *TCPProxy) Close() error {
 
 	if p.listener != nil {
 		p.listener.Close()
+		p.listener = nil
 	}
 
 	p.wg.Wait()
@@ -506,11 +776,13 @@ func (p *TCPProxy) Close() error {
 	// Tear down all port forwards
 	if p.portForwardMgr != nil {
 		p.portForwardMgr.TeardownAll()
+		p.portForwardMgr = nil
 	}
 
 	// Tear down all file syncs
 	if p.fileSyncMgr != nil {
 		p.fileSyncMgr.TeardownAll()
+		p.fileSyncMgr = nil
 	}
 
 	// Close SSH connection
@@ -521,15 +793,6 @@ func (p *TCPProxy) Close() error {
 	}
 
 	return nil
-}
-
-// shouldInterceptRequest checks if the request should be intercepted
-func shouldInterceptRequest(r *http.Request) bool {
-	if r.Method == http.MethodPost && containerCreatePattern.MatchString(r.URL.Path) {
-		return true
-	}
-	// Add more patterns here as needed
-	return false
 }
 
 // shouldCloseConnection determines if the connection should be closed after the response

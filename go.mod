@@ -2,7 +2,10 @@ module github.com/teamycloud/remote-docker-agent
 
 go 1.24
 
-require golang.org/x/crypto v0.33.0
+require (
+	github.com/dustin/go-humanize v1.0.1
+	golang.org/x/crypto v0.33.0
+)
 
 require (
 	github.com/mutagen-io/mutagen v0.18.1
@@ -13,7 +16,8 @@ require (
 )
 
 require (
-	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/bmatcuk/doublestar/v4 v4.7.1 // indirect
 	github.com/eknkc/basex v1.0.1 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
