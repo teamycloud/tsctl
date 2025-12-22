@@ -34,6 +34,8 @@ github.com/go-openapi/swag v0.19.5/go.mod h1:POnQmlKehdgb5mhVOsnJFsivZCEZ/vjK9gh
 github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69NZV8Q=
 github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b/go.mod h1:SBH7ygxi8pfUlaOkMMuAQtPIUF8ecWP5IEl/CR7VP2Q=
 github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e/go.mod h1:cIg4eruTrX1D+g88fzRXU5OdNfaM+9IcxsU14FzY7Hc=
+github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da h1:oI5xCqsCo564l8iNU+DwB5epxmsaqB+rhGL0m5jtYqE=
+github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da/go.mod h1:cIg4eruTrX1D+g88fzRXU5OdNfaM+9IcxsU14FzY7Hc=
 github.com/golang/mock v1.1.1/go.mod h1:oTYuIxOrZwtPieC+H1uAHpcLFnEyAGVDL/k47Jfbm0A=
 github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
 github.com/golang/protobuf v1.3.2/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
@@ -91,6 +93,8 @@ github.com/modern-go/reflect2 v1.0.1/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3Rllmb
 github.com/munnerz/goautoneg v0.0.0-20120707110453-a547fc61f48d/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/mutagen-io/apimachinery v0.21.3-mutagen1 h1:7bnH35Ayna8ERRINDJ+J+bRd/85vv7ySFzFYpkmX62o=
 github.com/mutagen-io/apimachinery v0.21.3-mutagen1/go.mod h1:H/IM+5vH9kZRNJ4l3x/fXP/5bOPJaVP/guptnZPeCFI=
+github.com/mutagen-io/fsevents v0.0.0-20230629001834-f53e17b91ebc h1:yOGQ0Hc3NfOWYm9aaluKJEOZWEbpCPEm/TbPU87YumM=
+github.com/mutagen-io/fsevents v0.0.0-20230629001834-f53e17b91ebc/go.mod h1:kmTyqetTEgYl9KF5JlHLKL6LXnhs2/oK5100pcMZRn8=
 github.com/mutagen-io/gopass v0.0.0-20230214181532-d4b7cdfe054c h1:c0xgZ8mF6PwiDc6aW2MEcdaCXxkt5K30kzylWqkT4oc=
 github.com/mutagen-io/gopass v0.0.0-20230214181532-d4b7cdfe054c/go.mod h1:Q87jWQAqEC/UdnYLd+A0mfR9oZl5gk6g/xvxzTpwLv8=
 github.com/mutagen-io/mutagen v0.18.1 h1:uYR9CHuynFNO0zGFMypI2LseX9VkIYlgfWQeI/j4824=

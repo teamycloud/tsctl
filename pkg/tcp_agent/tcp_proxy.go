@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"sync"
 
 	"github.com/mutagen-io/mutagen/pkg/forwarding"
@@ -35,6 +36,7 @@ type TCPProxy struct {
 	cfg            Config
 	sshClient      *SSHClient
 	portForwardMgr *PortForwardManager
+	fileSyncMgr    *FileSyncManager
 	mutagenSyncMgr *synchronization.Manager
 	listener       net.Listener
 	wg             sync.WaitGroup
@@ -52,10 +54,14 @@ func NewTCPProxy(cfg Config, forwardingManager *forwarding.Manager, synchronizat
 	// Create port forward manager
 	portForwardMgr := NewPortForwardManager(cfg, forwardingManager)
 
+	// Create file sync manager
+	fileSyncMgr := NewFileSyncManager(cfg, synchronizationManager)
+
 	return &TCPProxy{
 		cfg:            cfg,
 		sshClient:      sshClient,
 		portForwardMgr: portForwardMgr,
+		fileSyncMgr:    fileSyncMgr,
 		mutagenSyncMgr: synchronizationManager,
 		stopCh:         make(chan struct{}),
 	}, nil
@@ -227,6 +233,7 @@ func (p *TCPProxy) handleContainerOperation(req *http.Request) {
 			containerID := matches[1]
 			log.Printf("Container stop detected: %s", containerID)
 			p.portForwardMgr.TeardownForwards(containerID)
+			p.fileSyncMgr.TeardownSyncs(containerID)
 		}
 	}
 
@@ -236,6 +243,7 @@ func (p *TCPProxy) handleContainerOperation(req *http.Request) {
 			containerID := matches[1]
 			log.Printf("Container remove detected: %s", containerID)
 			p.portForwardMgr.TeardownForwards(containerID)
+			p.fileSyncMgr.TeardownSyncs(containerID)
 		}
 	}
 }
@@ -257,6 +265,9 @@ func (p *TCPProxy) handleContainerOperationResponse(req *http.Request, resp *htt
 				if err := p.portForwardMgr.SetupForwards(containerID); err != nil {
 					log.Printf("Failed to setup port forwards for %s: %v", containerID, err)
 				}
+				if err := p.fileSyncMgr.SetupSyncs(containerID); err != nil {
+					log.Printf("Failed to setup file syncs for %s: %v", containerID, err)
+				}
 			}
 		}
 	}
@@ -264,23 +275,39 @@ func (p *TCPProxy) handleContainerOperationResponse(req *http.Request, resp *htt
 
 // handleContainerCreate extracts port bindings from container create request and stores them
 func (p *TCPProxy) handleContainerCreateRequest(req *http.Request) {
-	reqBytes, err := dumpRequestBody(req)
-	if err != nil {
-		log.Printf("Failed to dump HTTP request: %v", err)
-		return
+	var originalReqBody []byte
+	var replacedReqBody []byte
+
+	defer func() {
+		if replacedReqBody != nil {
+			req.Header.Set("Content-Length", strconv.Itoa(len(replacedReqBody)))
+			req.Body = io.NopCloser(bytes.NewReader(replacedReqBody))
+		} else if originalReqBody != nil {
+			req.Body = io.NopCloser(bytes.NewReader(originalReqBody))
+		}
+	}()
+
+	if req.Body != nil {
+		rBytes, err := io.ReadAll(req.Body)
+		if err != nil {
+			log.Printf("Error reading container create request body: %v", err)
+			return
+		}
+		originalReqBody = rBytes
 	}
 
-	// Parse request JSON to get port bindings
+	// Parse request JSON to get port bindings and bind mounts
 	var createReq struct {
 		HostConfig struct {
 			PortBindings map[string][]struct {
 				HostIp   string `json:"HostIp"`
 				HostPort string `json:"HostPort"`
 			} `json:"PortBindings"`
+			Binds []string `json:"Binds"`
 		} `json:"HostConfig"`
 	}
 
-	if err := json.Unmarshal(reqBytes, &createReq); err != nil {
+	if err := json.Unmarshal(originalReqBody, &createReq); err != nil {
 		log.Printf("Failed to parse container create request: %v", err)
 		return
 	}
@@ -303,6 +330,12 @@ func (p *TCPProxy) handleContainerCreateRequest(req *http.Request) {
 	if len(portBindings) > 0 {
 		p.portForwardMgr.StorePortBindingsStart(req, portBindings)
 	}
+
+	// Extract bind mounts
+	if len(createReq.HostConfig.Binds) > 0 {
+		log.Printf("Bind mounts found: %v", createReq.HostConfig.Binds)
+		p.fileSyncMgr.StoreBindMountsStart(req, createReq.HostConfig.Binds)
+	}
 }
 
 // handleContainerCreate extracts port bindings from container create request and stores them
@@ -310,6 +343,7 @@ func (p *TCPProxy) handleContainerCreateResponse(req *http.Request, resp *http.R
 	if resp.StatusCode != 201 {
 		log.Printf("Container create detected with unexpected status code: %d", resp.StatusCode)
 		p.portForwardMgr.StorePortBindingsEnd(req, "")
+		p.fileSyncMgr.StoreBindMountsEnd(req, "")
 		return
 	}
 
@@ -330,17 +364,20 @@ func (p *TCPProxy) handleContainerCreateResponse(req *http.Request, resp *http.R
 	if err := json.Unmarshal(respBody.Bytes(), &createResp); err != nil {
 		log.Printf("Failed to parse container create response: %v", err)
 		p.portForwardMgr.StorePortBindingsEnd(req, "")
+		p.fileSyncMgr.StoreBindMountsEnd(req, "")
 		return
 	}
 
 	if createResp.Id == "" {
 		log.Printf("No container ID in create response")
 		p.portForwardMgr.StorePortBindingsEnd(req, "")
+		p.fileSyncMgr.StoreBindMountsEnd(req, "")
 		return
 	}
 
 	log.Printf("Container created with ID: %s", createResp.Id)
 	p.portForwardMgr.StorePortBindingsEnd(req, createResp.Id)
+	p.fileSyncMgr.StoreBindMountsEnd(req, createResp.Id)
 }
 
 // transparentProxyWithReaders handles bidirectional copying with buffered readers
@@ -471,6 +508,11 @@ func (p *TCPProxy) Close() error {
 		p.portForwardMgr.TeardownAll()
 	}
 
+	// Tear down all file syncs
+	if p.fileSyncMgr != nil {
+		p.fileSyncMgr.TeardownAll()
+	}
+
 	// Close SSH connection
 	if p.sshClient != nil {
 		if err := p.sshClient.Close(); err != nil {
@@ -479,18 +521,6 @@ func (p *TCPProxy) Close() error {
 	}
 
 	return nil
-}
-
-// dumpRequestBody logs HTTP request details for debugging
-func dumpRequestBody(r *http.Request) ([]byte, error) {
-	var body []byte
-	if r.Body != nil {
-		body, _ = io.ReadAll(r.Body)
-		// Restore body
-		r.Body = io.NopCloser(bytes.NewReader(body))
-	}
-
-	return body, nil
 }
 
 // shouldInterceptRequest checks if the request should be intercepted

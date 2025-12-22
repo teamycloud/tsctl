@@ -15,6 +15,8 @@ import (
 
 	_ "github.com/mutagen-io/mutagen/pkg/forwarding/protocols/local"
 	_ "github.com/mutagen-io/mutagen/pkg/forwarding/protocols/ssh"
+	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/local"
+	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/ssh"
 )
 
 func main() {

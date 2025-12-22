@@ -139,8 +139,8 @@ func (m *PortForwardManager) SetupForwards(containerID string) error {
 	return nil
 }
 
-// createConfiguration stores configuration for the create command.
-var createConfiguration struct {
+// pfCreateConfiguration stores configuration for the create command.
+var pfCreateConfiguration struct {
 	// help indicates whether or not to show help information and exit.
 	help bool
 	// name is the name specification for the session.
@@ -226,32 +226,27 @@ func loadAndValidateGlobalForwardingConfiguration(path string) (*forwarding.Conf
 
 // setupSingleForward sets up a single SSH port forward
 func (m *PortForwardManager) setupSingleForward(containerID string, binding *PortBinding) (string, error) {
-	createConfiguration.name = fmt.Sprintf("forward-%s-%s", containerID[:8], binding.HostPort)
-	createConfiguration.labels = nil
-	createConfiguration.paused = false
-	createConfiguration.noGlobalConfiguration = false
-	createConfiguration.configurationFiles = nil
+	pfCreateConfiguration.name = fmt.Sprintf("forward-%s-%s", containerID[:8], binding.HostPort)
+	pfCreateConfiguration.labels = nil
+	pfCreateConfiguration.paused = false
+	pfCreateConfiguration.noGlobalConfiguration = false
+	pfCreateConfiguration.configurationFiles = nil
 
-	createConfiguration.socketOverwriteMode = ""
-	createConfiguration.socketOverwriteModeSource = ""
-	createConfiguration.socketOverwriteModeDestination = ""
+	pfCreateConfiguration.socketOverwriteMode = ""
+	pfCreateConfiguration.socketOverwriteModeSource = ""
+	pfCreateConfiguration.socketOverwriteModeDestination = ""
 
-	createConfiguration.socketOwner = ""
-	createConfiguration.socketOwnerSource = ""
-	createConfiguration.socketOwnerDestination = ""
+	pfCreateConfiguration.socketOwner = ""
+	pfCreateConfiguration.socketOwnerSource = ""
+	pfCreateConfiguration.socketOwnerDestination = ""
 
-	createConfiguration.socketGroup = ""
-	createConfiguration.socketGroupSource = ""
-	createConfiguration.socketGroupDestination = ""
+	pfCreateConfiguration.socketGroup = ""
+	pfCreateConfiguration.socketGroupSource = ""
+	pfCreateConfiguration.socketGroupDestination = ""
 
-	createConfiguration.socketPermissionMode = ""
-	createConfiguration.socketPermissionModeSource = ""
-	createConfiguration.socketPermissionModeDestination = ""
-
-	// tcp:localhost:8080
-	//  george@example.org:24:tcp:localhost:8080
-	//
-	//Connect to example.org on a custom SSH port (24) as the user george and bind to or target the loopback interface on port 8080.
+	pfCreateConfiguration.socketPermissionMode = ""
+	pfCreateConfiguration.socketPermissionModeSource = ""
+	pfCreateConfiguration.socketPermissionModeDestination = ""
 
 	forwardSource := fmt.Sprintf("tcp:localhost:%s", binding.HostPort)
 	forwardDest := fmt.Sprintf("%s@%s:tcp:localhost:%s",
@@ -267,13 +262,13 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 	}
 
 	// Validate the name.
-	if err := selection.EnsureNameValid(createConfiguration.name); err != nil {
+	if err := selection.EnsureNameValid(pfCreateConfiguration.name); err != nil {
 		return "", fmt.Errorf("invalid session name: %w", err)
 	}
 
 	// Parse, validate, and record labels.
 	labels := make(map[string]string)
-	for _, label := range createConfiguration.labels {
+	for _, label := range pfCreateConfiguration.labels {
 		components := strings.SplitN(label, "=", 2)
 		var key, value string
 		key = components[0]
@@ -295,7 +290,7 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 
 	// Unless disabled, attempt to load configuration from the global
 	// configuration file and merge it into our cumulative configuration.
-	if !createConfiguration.noGlobalConfiguration {
+	if !pfCreateConfiguration.noGlobalConfiguration {
 		// Compute the path to the global configuration file.
 		globalConfigurationPath, err := global.ConfigurationPath()
 		if err != nil {
@@ -315,7 +310,7 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 
 	// If additional default configuration files have been specified, then load
 	// them and merge them into the cumulative configuration.
-	for _, configurationFile := range createConfiguration.configurationFiles {
+	for _, configurationFile := range pfCreateConfiguration.configurationFiles {
 		if c, err := loadAndValidateGlobalForwardingConfiguration(configurationFile); err != nil {
 			return "", fmt.Errorf("unable to load configuration file (%s): %w", configurationFile, err)
 		} else {
@@ -325,63 +320,63 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 
 	// Validate and convert socket overwrite mode specifications.
 	var socketOverwriteMode, socketOverwriteModeSource, socketOverwriteModeDestination forwarding.SocketOverwriteMode
-	if createConfiguration.socketOverwriteMode != "" {
-		if err := socketOverwriteMode.UnmarshalText([]byte(createConfiguration.socketOverwriteMode)); err != nil {
+	if pfCreateConfiguration.socketOverwriteMode != "" {
+		if err := socketOverwriteMode.UnmarshalText([]byte(pfCreateConfiguration.socketOverwriteMode)); err != nil {
 			return "", fmt.Errorf("unable to socket overwrite mode: %w", err)
 		}
 	}
-	if createConfiguration.socketOverwriteModeSource != "" {
-		if err := socketOverwriteModeSource.UnmarshalText([]byte(createConfiguration.socketOverwriteModeSource)); err != nil {
+	if pfCreateConfiguration.socketOverwriteModeSource != "" {
+		if err := socketOverwriteModeSource.UnmarshalText([]byte(pfCreateConfiguration.socketOverwriteModeSource)); err != nil {
 			return "", fmt.Errorf("unable to socket overwrite mode for source: %w", err)
 		}
 	}
-	if createConfiguration.socketOverwriteModeDestination != "" {
-		if err := socketOverwriteModeDestination.UnmarshalText([]byte(createConfiguration.socketOverwriteModeDestination)); err != nil {
+	if pfCreateConfiguration.socketOverwriteModeDestination != "" {
+		if err := socketOverwriteModeDestination.UnmarshalText([]byte(pfCreateConfiguration.socketOverwriteModeDestination)); err != nil {
 			return "", fmt.Errorf("unable to socket overwrite mode for destination: %w", err)
 		}
 	}
 
 	// Validate socket owner specifications.
-	if createConfiguration.socketOwner != "" {
+	if pfCreateConfiguration.socketOwner != "" {
 		if kind, _ := filesystem.ParseOwnershipIdentifier(
-			createConfiguration.socketOwner,
+			pfCreateConfiguration.socketOwner,
 		); kind == filesystem.OwnershipIdentifierKindInvalid {
 			return "", errors.New("invalid socket ownership specification")
 		}
 	}
-	if createConfiguration.socketOwnerSource != "" {
+	if pfCreateConfiguration.socketOwnerSource != "" {
 		if kind, _ := filesystem.ParseOwnershipIdentifier(
-			createConfiguration.socketOwnerSource,
+			pfCreateConfiguration.socketOwnerSource,
 		); kind == filesystem.OwnershipIdentifierKindInvalid {
 			return "", errors.New("invalid socket ownership specification for source")
 		}
 	}
-	if createConfiguration.socketOwnerDestination != "" {
+	if pfCreateConfiguration.socketOwnerDestination != "" {
 		if kind, _ := filesystem.ParseOwnershipIdentifier(
-			createConfiguration.socketOwnerDestination,
+			pfCreateConfiguration.socketOwnerDestination,
 		); kind == filesystem.OwnershipIdentifierKindInvalid {
 			return "", errors.New("invalid socket ownership specification for destination")
 		}
 	}
 
 	// Validate socket group specifications.
-	if createConfiguration.socketGroup != "" {
+	if pfCreateConfiguration.socketGroup != "" {
 		if kind, _ := filesystem.ParseOwnershipIdentifier(
-			createConfiguration.socketGroup,
+			pfCreateConfiguration.socketGroup,
 		); kind == filesystem.OwnershipIdentifierKindInvalid {
 			return "", errors.New("invalid socket group specification")
 		}
 	}
-	if createConfiguration.socketGroupSource != "" {
+	if pfCreateConfiguration.socketGroupSource != "" {
 		if kind, _ := filesystem.ParseOwnershipIdentifier(
-			createConfiguration.socketGroupSource,
+			pfCreateConfiguration.socketGroupSource,
 		); kind == filesystem.OwnershipIdentifierKindInvalid {
 			return "", errors.New("invalid socket group specification for source")
 		}
 	}
-	if createConfiguration.socketGroupDestination != "" {
+	if pfCreateConfiguration.socketGroupDestination != "" {
 		if kind, _ := filesystem.ParseOwnershipIdentifier(
-			createConfiguration.socketGroupDestination,
+			pfCreateConfiguration.socketGroupDestination,
 		); kind == filesystem.OwnershipIdentifierKindInvalid {
 			return "", errors.New("invalid socket group specification for destination")
 		}
@@ -389,18 +384,18 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 
 	// Validate and convert socket permission mode specifications.
 	var socketPermissionMode, socketPermissionModeSource, socketPermissionModeDestination filesystem.Mode
-	if createConfiguration.socketPermissionMode != "" {
-		if err := socketPermissionMode.UnmarshalText([]byte(createConfiguration.socketPermissionMode)); err != nil {
+	if pfCreateConfiguration.socketPermissionMode != "" {
+		if err := socketPermissionMode.UnmarshalText([]byte(pfCreateConfiguration.socketPermissionMode)); err != nil {
 			return "", fmt.Errorf("unable to parse socket permission mode: %w", err)
 		}
 	}
-	if createConfiguration.socketPermissionModeSource != "" {
-		if err := socketPermissionModeSource.UnmarshalText([]byte(createConfiguration.socketPermissionModeSource)); err != nil {
+	if pfCreateConfiguration.socketPermissionModeSource != "" {
+		if err := socketPermissionModeSource.UnmarshalText([]byte(pfCreateConfiguration.socketPermissionModeSource)); err != nil {
 			return "", fmt.Errorf("unable to parse socket permission mode for source: %w", err)
 		}
 	}
-	if createConfiguration.socketPermissionModeDestination != "" {
-		if err := socketPermissionModeDestination.UnmarshalText([]byte(createConfiguration.socketPermissionModeDestination)); err != nil {
+	if pfCreateConfiguration.socketPermissionModeDestination != "" {
+		if err := socketPermissionModeDestination.UnmarshalText([]byte(pfCreateConfiguration.socketPermissionModeDestination)); err != nil {
 			return "", fmt.Errorf("unable to parse socket permission mode for destination: %w", err)
 		}
 	}
@@ -409,8 +404,8 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 	// configuration.
 	configuration = forwarding.MergeConfigurations(configuration, &forwarding.Configuration{
 		SocketOverwriteMode:  socketOverwriteMode,
-		SocketOwner:          createConfiguration.socketOwner,
-		SocketGroup:          createConfiguration.socketGroup,
+		SocketOwner:          pfCreateConfiguration.socketOwner,
+		SocketGroup:          pfCreateConfiguration.socketGroup,
 		SocketPermissionMode: uint32(socketPermissionMode),
 	})
 
@@ -421,19 +416,19 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 		Configuration: configuration,
 		ConfigurationSource: &forwarding.Configuration{
 			SocketOverwriteMode:  socketOverwriteModeSource,
-			SocketOwner:          createConfiguration.socketOwnerSource,
-			SocketGroup:          createConfiguration.socketGroupSource,
+			SocketOwner:          pfCreateConfiguration.socketOwnerSource,
+			SocketGroup:          pfCreateConfiguration.socketGroupSource,
 			SocketPermissionMode: uint32(socketPermissionModeSource),
 		},
 		ConfigurationDestination: &forwarding.Configuration{
 			SocketOverwriteMode:  socketOverwriteModeDestination,
-			SocketOwner:          createConfiguration.socketOwnerDestination,
-			SocketGroup:          createConfiguration.socketGroupDestination,
+			SocketOwner:          pfCreateConfiguration.socketOwnerDestination,
+			SocketGroup:          pfCreateConfiguration.socketGroupDestination,
 			SocketPermissionMode: uint32(socketPermissionModeDestination),
 		},
-		Name:   createConfiguration.name,
+		Name:   pfCreateConfiguration.name,
 		Labels: labels,
-		Paused: createConfiguration.paused,
+		Paused: pfCreateConfiguration.paused,
 	}
 
 	session, err := m.mutagenForwardMgr.Create(context.Background(), specification.Source,
@@ -522,5 +517,5 @@ func compressContainerID(rawContainerId string) string {
 	base64Str = strings.ReplaceAll(base64Str, "=", "-")
 	base64Str = strings.ReplaceAll(base64Str, "+", "_")
 	base64Str = strings.ReplaceAll(base64Str, "/", ".")
-	return base64Str + "0" // make sure the value ends with a number
+	return fmt.Sprintf("0%s0", base64Str) // make sure the value begins and ends with a number
 }
