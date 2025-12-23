@@ -22,9 +22,20 @@ import (
 func main() {
 	var (
 		listenAddr   = flag.String("listen", "127.0.0.1:2375", "Local address to listen on")
+		transport    = flag.String("transport", "ssh", "Transport type: 'ssh' or 'mtls'")
+		
+		// SSH transport flags
 		sshUser      = flag.String("ssh-user", "root", "SSH username")
 		sshHost      = flag.String("ssh-host", "remote.example.com:22", "SSH host and port")
 		sshKeyPath   = flag.String("ssh-key", os.Getenv("HOME")+"/.ssh/id_rsa", "Path to SSH private key")
+		
+		// mTLS transport flags
+		mtlsEndpoint = flag.String("mtls-endpoint", "", "mTLS endpoint address (e.g., gateway.tinyscale.net:443)")
+		mtlsCertPath = flag.String("mtls-cert", "", "Path to mTLS client certificate")
+		mtlsKeyPath  = flag.String("mtls-key", "", "Path to mTLS client private key")
+		mtlsCAPath   = flag.String("mtls-ca", "", "Path to mTLS CA certificate (optional)")
+		mtlsSNIHost  = flag.String("mtls-sni", "", "SNI hostname (e.g., {hostid}.containers.tinyscale.net)")
+		
 		remoteDocker = flag.String("remote-docker", "unix:///var/run/docker.sock", "Remote Docker socket URL")
 		logLevelFlag = flag.String("log-level", "info", "Log level")
 	)
@@ -47,21 +58,41 @@ func main() {
 	//}
 	//defer lock.Release()
 
+	// Build configuration based on transport type
 	cfg := tcp_agent.Config{
 		ListenAddr:   *listenAddr,
+		Transport:    tcp_agent.TransportType(*transport),
 		SSHUser:      *sshUser,
 		SSHHost:      *sshHost,
 		SSHKeyPath:   *sshKeyPath,
+		MTLSEndpoint: *mtlsEndpoint,
+		MTLSCertPath: *mtlsCertPath,
+		MTLSKeyPath:  *mtlsKeyPath,
+		MTLSCAPath:   *mtlsCAPath,
+		MTLSSNIHost:  *mtlsSNIHost,
 		RemoteDocker: *remoteDocker,
 	}
 
-	bannerFormat := `
+	// Display banner based on transport type
+	var bannerFormat string
+	if cfg.Transport == tcp_agent.TransportMTLS {
+		bannerFormat = `
+Starting TCP proxy with mTLS transport...
+  Listen: %s
+  mTLS Endpoint: %s
+  SNI Host: %s
+  Remote Docker: %s
+`
+		logger.Infof(bannerFormat, cfg.ListenAddr, cfg.MTLSEndpoint, cfg.MTLSSNIHost, cfg.RemoteDocker)
+	} else {
+		bannerFormat = `
 Starting TCP proxy with SSH transport...
   Listen: %s
   SSH: %s@%s
   Remote Docker: %s
 `
-	logger.Infof(bannerFormat, cfg.ListenAddr, cfg.SSHUser, cfg.SSHHost, cfg.RemoteDocker)
+		logger.Infof(bannerFormat, cfg.ListenAddr, cfg.SSHUser, cfg.SSHHost, cfg.RemoteDocker)
+	}
 
 	// todo: list current sessions and get their container IDs (get their labels and try to check if container is still running)
 	forwardingManager, err := forwarding.NewManager(logger.Sublogger("forward"))

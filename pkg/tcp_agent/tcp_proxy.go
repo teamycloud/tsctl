@@ -37,10 +37,10 @@ var (
 )
 
 // TCPProxy implements a transparent TCP proxy that forwards connections
-// through an SSH tunnel to a remote Docker daemon
+// through a transport (SSH or mTLS) to a remote Docker daemon
 type TCPProxy struct {
 	cfg              Config                  `json:"cfg"`
-	sshClient        *SSHClient              `json:"ssh_client,omitempty"`
+	transport        Transport               `json:"-"` // Transport interface (SSH or mTLS)
 	portForwardMgr   *PortForwardManager     `json:"port_forward_mgr,omitempty"`
 	fileSyncMgr      *FileSyncManager        `json:"file_sync_mgr,omitempty"`
 	listener         net.Listener            `json:"listener,omitempty"`
@@ -51,12 +51,12 @@ type TCPProxy struct {
 	containerIDCache sync.Map                `json:"-"` // Cache for *http.Request -> containerID mapping
 }
 
-// NewTCPProxy creates a new TCP proxy instance and establishes SSH connection
+// NewTCPProxy creates a new TCP proxy instance and establishes transport connection
 func NewTCPProxy(cfg Config, forwardingManager *forwarding.Manager, synchronizationManager *synchronization.Manager) (*TCPProxy, error) {
-	// Create SSH client
-	sshClient, err := NewSSHClient(cfg)
+	// Create transport client (SSH or mTLS)
+	transport, err := NewTransport(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create ssh client: %w", err)
+		return nil, fmt.Errorf("create transport: %w", err)
 	}
 
 	prompter := &cmd.StatusLinePrompter{Printer: &cmd.StatusLinePrinter{}}
@@ -81,7 +81,7 @@ func NewTCPProxy(cfg Config, forwardingManager *forwarding.Manager, synchronizat
 
 	proxy := &TCPProxy{
 		cfg:              cfg,
-		sshClient:        sshClient,
+		transport:        transport,
 		prompter:         prompter,
 		promptIdentifier: promptIdentifier,
 		portForwardMgr:   portForwardMgr,
@@ -136,8 +136,8 @@ func (p *TCPProxy) handleConnection(clientConn net.Conn) {
 	defer p.wg.Done()
 	defer clientConn.Close()
 
-	// Establish connection to remote Docker via SSH
-	remoteConn, err := p.sshClient.DialRemoteDocker()
+	// Establish connection to remote Docker via transport
+	remoteConn, err := p.transport.DialRemoteDocker()
 	if err != nil {
 		log.Printf("Failed to dial remote Docker: %v", err)
 		return
@@ -382,7 +382,7 @@ func extractAPIVersion(path string) string {
 // getContainerID fetches the full container ID from Docker API given a name or short ID
 func (p *TCPProxy) getContainerID(apiVersion string, containerIDOrName string) string {
 	// Create a new connection to query container info
-	conn, err := p.sshClient.DialRemoteDocker()
+	conn, err := p.transport.DialRemoteDocker()
 	if err != nil {
 		log.Printf("Failed to dial remote Docker for container ID lookup: %v", err)
 		return ""
@@ -811,10 +811,10 @@ func (p *TCPProxy) Close() error {
 
 	p.wg.Wait()
 
-	// Close SSH connection
-	if p.sshClient != nil {
-		if err := p.sshClient.Close(); err != nil {
-			log.Printf("Error closing SSH client: %v", err)
+	// Close transport connection
+	if p.transport != nil {
+		if err := p.transport.Close(); err != nil {
+			log.Printf("Error closing transport: %v", err)
 		}
 	}
 
@@ -889,11 +889,11 @@ func (p *TCPProxy) createRemoteMountDirectories(mounts *ContainerMounts) error {
 			log.Printf("Local path %s is a file, will create parent directory %s on remote", localPath, dirToCreate)
 		}
 
-		// Execute SSH command to create the directory
+		// Execute command to create the directory (may not be supported by all transports)
 		cmd := fmt.Sprintf("mkdir -p '%s'", dirToCreate)
 		log.Printf("Executing on remote host: %s", cmd)
 
-		if output, err := p.sshClient.ExecuteCommand(cmd); err != nil {
+		if output, err := p.transport.ExecuteCommand(cmd); err != nil {
 			log.Printf("Failed to create directory %s on remote host: %v, output: %s", dirToCreate, err, output)
 			// Continue with other mounts even if one fails
 			continue
@@ -968,7 +968,7 @@ func (p *TCPProxy) cleanupOrphanedSessions() {
 // isContainerRunning checks if a container exists and is running on the remote host
 func (p *TCPProxy) isContainerRunning(containerID string) bool {
 	// Create a new connection to query container state
-	conn, err := p.sshClient.DialRemoteDocker()
+	conn, err := p.transport.DialRemoteDocker()
 	if err != nil {
 		log.Printf("Failed to dial remote Docker for container check: %v", err)
 		return false
@@ -1034,7 +1034,7 @@ func (p *TCPProxy) isContainerRunning(containerID string) bool {
 // isContainerStopped checks if a container is actually stopped by inspecting its state
 func (p *TCPProxy) isContainerStopped(containerID string) bool {
 	// Create a new connection to query container state
-	conn, err := p.sshClient.DialRemoteDocker()
+	conn, err := p.transport.DialRemoteDocker()
 	if err != nil {
 		log.Printf("Failed to dial remote Docker for state check: %v", err)
 		return false
