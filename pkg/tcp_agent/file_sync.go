@@ -382,13 +382,10 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, 
 	fsCreateConfiguration.permissionsMode = ""
 	fsCreateConfiguration.defaultFileMode = ""
 	fsCreateConfiguration.defaultFileModeAlpha = ""
-	fsCreateConfiguration.defaultFileModeBeta = "644"
-	if !mount.ReadOnly {
-		fsCreateConfiguration.defaultFileModeBeta = "666"
-	}
+	fsCreateConfiguration.defaultFileModeBeta = "666"
 	fsCreateConfiguration.defaultDirectoryMode = ""
 	fsCreateConfiguration.defaultDirectoryModeAlpha = ""
-	fsCreateConfiguration.defaultDirectoryModeBeta = ""
+	fsCreateConfiguration.defaultDirectoryModeBeta = "777"
 
 	fsCreateConfiguration.defaultOwner = ""
 	fsCreateConfiguration.defaultOwnerAlpha = ""
