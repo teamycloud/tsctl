@@ -209,7 +209,7 @@ func (u *upgradedConn) Read(p []byte) (int, error) {
 
 // Dialer creates a TCP connection using the tstunnel transport
 // This can be used for port forwarding
-// Note: Context parameter reserved for future cancellation support
+// TODO: Implement context cancellation support for connection timeout
 func (t *Transport) Dialer(_ context.Context) (net.Conn, error) {
 	// Use the common dialWithUpgrade method
 	conn, reader, err := t.dialWithUpgrade("/tinyscale/v1/tunnel/port")
