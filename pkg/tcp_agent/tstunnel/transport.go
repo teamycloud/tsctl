@@ -82,8 +82,11 @@ func (t *Transport) buildTLSConfig() (*tls.Config, error) {
 
 // dialWithUpgrade establishes an mTLS connection and performs HTTP UPGRADE
 func (t *Transport) dialWithUpgrade(apiPath string) (net.Conn, *bufio.Reader, error) {
+	// Clone TLS config for thread safety
+	tlsConfig := t.tlsConfig.Clone()
+	
 	// Dial the mTLS endpoint
-	conn, err := tls.Dial("tcp", t.endpoint, t.tlsConfig)
+	conn, err := tls.Dial("tcp", t.endpoint, tlsConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mtls dial: %w", err)
 	}
@@ -182,19 +185,20 @@ func (t *Transport) Copy() agent.Transport {
 // after HTTP UPGRADE
 type upgradedConn struct {
 	net.Conn
-	reader *bufio.Reader
-	once   sync.Once // Ensure reader is only cleared once
+	reader         *bufio.Reader
+	readerConsumed bool
+	once           sync.Once // Ensure reader flag is only set once
 }
 
 // Read reads from the buffered reader first, then from the underlying connection
 func (u *upgradedConn) Read(p []byte) (int, error) {
-	// If there's buffered data, read from it first
-	if u.reader != nil && u.reader.Buffered() > 0 {
+	// If there's buffered data and we haven't consumed it yet, read from it first
+	if !u.readerConsumed && u.reader != nil && u.reader.Buffered() > 0 {
 		n, err := u.reader.Read(p)
-		// Clear reader after consuming all buffered data
+		// Mark reader as consumed after draining all buffered data
 		if err == nil && u.reader.Buffered() == 0 {
 			u.once.Do(func() {
-				u.reader = nil
+				u.readerConsumed = true
 			})
 		}
 		return n, err
@@ -203,9 +207,10 @@ func (u *upgradedConn) Read(p []byte) (int, error) {
 	return u.Conn.Read(p)
 }
 
-// Dialer creates a net.Dialer that uses the tstunnel transport
+// Dialer creates a TCP connection using the tstunnel transport
 // This can be used for port forwarding
-func (t *Transport) Dialer(ctx context.Context) (net.Conn, error) {
+// Note: Context parameter reserved for future cancellation support
+func (t *Transport) Dialer(_ context.Context) (net.Conn, error) {
 	// Use the common dialWithUpgrade method
 	conn, reader, err := t.dialWithUpgrade("/tinyscale/v1/tunnel/port")
 	if err != nil {
