@@ -73,6 +73,28 @@ func main() {
 		RemoteDocker: *remoteDocker,
 	}
 
+	// Validate configuration based on transport type
+	if cfg.Transport == tcp_agent.TransportMTLS {
+		if cfg.MTLSEndpoint == "" {
+			log.Fatalf("mTLS endpoint is required when using mTLS transport")
+		}
+		if cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
+			log.Fatalf("mTLS certificate and key are required when using mTLS transport")
+		}
+		if cfg.MTLSSNIHost == "" {
+			log.Fatalf("mTLS SNI hostname is required when using mTLS transport")
+		}
+	} else if cfg.Transport == tcp_agent.TransportSSH {
+		if cfg.SSHHost == "" {
+			log.Fatalf("SSH host is required when using SSH transport")
+		}
+		if cfg.SSHKeyPath == "" {
+			log.Fatalf("SSH key path is required when using SSH transport")
+		}
+	} else {
+		log.Fatalf("Invalid transport type: %s (must be 'ssh' or 'mtls')", cfg.Transport)
+	}
+
 	// Display banner based on transport type
 	var bannerFormat string
 	if cfg.Transport == tcp_agent.TransportMTLS {

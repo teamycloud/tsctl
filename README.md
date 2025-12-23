@@ -185,6 +185,64 @@ mTLS 传输的优势：
 
 **注意**: 当前实现的 mTLS 传输主要用于 Docker Engine API 调用。端口转发和文件同步功能仍然依赖 SSH 传输（或需要服务器端实现相应的 Tinyscale API 端点）。
 
+## 测试
+
+### 测试 SSH 传输
+
+```bash
+# 确保有可访问的 SSH 主机和 Docker daemon
+./remote-docker-agent \
+  --transport ssh \
+  --listen 127.0.0.1:2375 \
+  --ssh-user your-user \
+  --ssh-host your-host:22 \
+  --ssh-key ~/.ssh/id_rsa \
+  --remote-docker unix:///var/run/docker.sock
+
+# 在另一个终端测试
+export DOCKER_HOST=tcp://127.0.0.1:2375
+docker ps
+docker run hello-world
+```
+
+### 测试 mTLS 传输
+
+测试 mTLS 传输需要：
+1. 一个支持 mTLS 的网关服务（例如 Tinyscale 或自定义实现）
+2. 有效的客户端证书和私钥
+3. 网关需要支持基于 SNI 的路由，将请求转发到正确的 Docker daemon
+
+```bash
+# 使用 mTLS 连接
+./remote-docker-agent \
+  --transport mtls \
+  --listen 127.0.0.1:2375 \
+  --mtls-endpoint gateway.example.com:443 \
+  --mtls-cert /path/to/client-cert.pem \
+  --mtls-key /path/to/client-key.pem \
+  --mtls-ca /path/to/ca-cert.pem \
+  --mtls-sni myhost.containers.example.net \
+  --remote-docker unix:///var/run/docker.sock
+
+# 在另一个终端测试
+export DOCKER_HOST=tcp://127.0.0.1:2375
+docker ps
+```
+
+### 服务端实现要求
+
+如果你想实现支持 mTLS 的服务端，需要：
+
+1. **Docker Engine API 转发**：
+   - 监听 mTLS 连接
+   - 根据 SNI 识别目标主机（例如 `{hostid}.containers.domain.net`）
+   - 将以 `/v1.*/` 开头的请求代理到对应主机的 Docker daemon
+
+2. **Mutagen 隧道支持（可选）**：
+   - 支持 HTTP UPGRADE 请求到 `/tinyscale/v1/tunnel/*` 路径
+   - 升级连接为 TCP 隧道
+   - 将隧道流量转发到目标主机的 mutagen agent
+
 ## 开发计划
 
 - 支持 WebSocket/劫持连接（exec、attach、logs -f）
