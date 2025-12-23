@@ -14,7 +14,7 @@ import (
 
 type CommandRequest struct {
 	Command string   `json:"command"`
-	Args    []string `json:"args"`
+	Args    []string `json:"args,omitempty"`
 }
 
 func handleCommand(w http.ResponseWriter, r *http.Request) {

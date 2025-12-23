@@ -17,6 +17,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	// Add commands to root
 	rootCmd.AddCommand(commands_ts.NewStartCommand())
+	rootCmd.AddCommand(commands_ts.NewGuestExecCommand())
 }
 
 func main() {
