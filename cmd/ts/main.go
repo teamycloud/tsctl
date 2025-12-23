@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/teamycloud/remote-docker-agent/pkg/commands"
+	"github.com/teamycloud/remote-docker-agent/pkg/commands_ts"
 )
 
 var rootCmd = &cobra.Command{
@@ -16,7 +16,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	// Add commands to root
-	rootCmd.AddCommand(commands.NewStartCommand())
+	rootCmd.AddCommand(commands_ts.NewStartCommand())
 }
 
 func main() {
