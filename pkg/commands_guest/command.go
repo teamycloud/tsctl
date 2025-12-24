@@ -79,6 +79,10 @@ func runCommand(cmdReq *CommandRequest, w http.ResponseWriter) {
 		return
 	}
 
+	// Register the connection
+	processRegistry.AddConnection(conn)
+	defer processRegistry.RemoveConnection(conn)
+
 	// Start the process
 	cmd := exec.Command(cmdReq.Command, cmdReq.Args...)
 
@@ -102,6 +106,10 @@ func runCommand(cmdReq *CommandRequest, w http.ResponseWriter) {
 		log.Printf("Failed to start command: %v", err)
 		return
 	}
+
+	// Register the process for graceful termination
+	processRegistry.AddProcess(cmd.Process)
+	defer processRegistry.RemoveProcess(cmd.Process)
 
 	// Pipe connection to stdin
 	go func() {
