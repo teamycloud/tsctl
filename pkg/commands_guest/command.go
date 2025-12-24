@@ -15,6 +15,7 @@ import (
 type CommandRequest struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
+	Envs    []string `json:"envs,omitempty"`
 }
 
 func handleCommand(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +86,14 @@ func runCommand(cmdReq *CommandRequest, w http.ResponseWriter) {
 
 	// Start the process
 	cmd := exec.Command(cmdReq.Command, cmdReq.Args...)
+
+	// Set environment variables if provided
+	if len(cmdReq.Envs) > 0 {
+		// Start with the current environment
+		cmd.Env = os.Environ()
+		// Append the custom environment variables
+		cmd.Env = append(cmd.Env, cmdReq.Envs...)
+	}
 
 	// Get stdin pipe
 	stdin, err := cmd.StdinPipe()

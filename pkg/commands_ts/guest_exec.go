@@ -19,6 +19,7 @@ import (
 type CommandRequest struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
+	Envs    []string `json:"envs,omitempty"`
 }
 
 type TLSConfig struct {
@@ -37,6 +38,7 @@ func NewGuestExecCommand() *cobra.Command {
 		caCertFile     string
 		serverName     string
 		insecure       bool
+		envs           []string
 	)
 
 	cmd := &cobra.Command{
@@ -67,7 +69,7 @@ Example:
 				insecure:       insecure,
 			}
 
-			return executeCommand(serverAddr, command, cmdArgs, tlsConfig)
+			return executeCommand(serverAddr, command, cmdArgs, envs, tlsConfig)
 		},
 	}
 
@@ -78,17 +80,19 @@ Example:
 	cmd.Flags().StringVar(&caCertFile, "ca", "", "CA certificate file")
 	cmd.Flags().StringVar(&serverName, "server-name", "", "Server name for TLS verification")
 	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification")
+	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Environment variable (can be repeated, format: KEY=VALUE)")
 
 	cmd.MarkFlagRequired("server")
 
 	return cmd
 }
 
-func executeCommand(serverAddr, command string, args []string, tlsCfg TLSConfig) error {
+func executeCommand(serverAddr, command string, args []string, envs []string, tlsCfg TLSConfig) error {
 	// Create the command request
 	cmdReq := CommandRequest{
 		Command: command,
 		Args:    args,
+		Envs:    envs,
 	}
 
 	// Marshal to JSON
