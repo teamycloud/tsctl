@@ -92,8 +92,8 @@ func (pr *ProcessRegistry) TerminateAll() {
 
 func RunServer(port int) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/command", handleCommand)
-	mux.HandleFunc("/copy", handleCopy)
+	mux.HandleFunc("/tinyscale/v1/host/command", handleCommand)
+	mux.HandleFunc("/tinyscale/v1/host/copy", handleCopy)
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("Starting guest agent on %s", addr)

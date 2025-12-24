@@ -113,7 +113,7 @@ func executeCommand(serverAddr, command string, args []string, envs []string, tl
 		scheme = "http"
 	}
 
-	url := fmt.Sprintf("%s://%s/command", scheme, serverAddr)
+	url := fmt.Sprintf("%s://%s/tinyscale/v1/host/command", scheme, serverAddr)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonData))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create request: %v\n", err)
