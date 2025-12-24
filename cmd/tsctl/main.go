@@ -9,14 +9,14 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "ts",
+	Use:   "tsctl",
 	Short: "tinyscale - your container runtime on the cloud",
 	Long:  `Utilities for managing and connecting container hosts on the tinyscale platform`,
 }
 
 func init() {
 	rootCmd.AddCommand(commands_ts.NewStartCommand())
-	rootCmd.AddCommand(commands_ts.NewGuestExecCommand())
+	rootCmd.AddCommand(commands_ts.NewHostExecCommand())
 }
 
 func main() {

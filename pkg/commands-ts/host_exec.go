@@ -30,7 +30,7 @@ type TLSConfig struct {
 	insecure       bool
 }
 
-func NewGuestExecCommand() *cobra.Command {
+func NewHostExecCommand() *cobra.Command {
 	var (
 		serverAddr     string
 		clientCertFile string
@@ -42,20 +42,20 @@ func NewGuestExecCommand() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "guest-exec [flags] -- COMMAND [args...]",
-		Short: "Execute a command on the remote guest",
-		Long: `Execute a command on the remote guest server via HTTP upgrade to TCP.
+		Use:   "host-exec [flags] -- COMMAND [args...]",
+		Short: "Execute a command on the container host",
+		Long: `Execute a command on the container host server provided by tinyscale.
 
 Use -- to separate ts flags from the command to execute and its arguments.
 
 Example:
-  ts guest-exec --server=host:port -- ls -la
-  ts guest-exec --server=host:port --insecure -- bash -c "echo hello"`,
+  ts host-exec --server=host:port -- ls -la
+  ts host-exec --server=host:port --insecure -- bash -c "echo hello"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// At this point, args contains everything after "--"
 			// Cobra automatically handles the "--" delimiter
 			if len(args) == 0 {
-				return fmt.Errorf("no command specified. Usage: ts guest-exec [flags] -- COMMAND [args...]")
+				return fmt.Errorf("no command specified. Usage: ts host-exec [flags] -- COMMAND [args...]")
 			}
 
 			command := args[0]
