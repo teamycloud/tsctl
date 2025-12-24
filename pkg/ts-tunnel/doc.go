@@ -15,11 +15,12 @@
 package ts_tunnel
 
 import (
-	"github.com/mutagen-io/mutagen/pkg/forwarding"
-	"github.com/mutagen-io/mutagen/pkg/synchronization"
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+
 	urlpkg "github.com/mutagen-io/mutagen/pkg/url"
-	forwardingprotocol "github.com/teamycloud/tsctl/pkg/ts-tunnel/forwarding-protocol"
-	synchronizationprotocol "github.com/teamycloud/tsctl/pkg/ts-tunnel/synchronization-protocol"
 )
 
 const (
@@ -28,12 +29,66 @@ const (
 	Protocol_Tstunnel urlpkg.Protocol = 100
 )
 
-// init registers the ts-tunnel protocol handlers with mutagen.
-// This must be called before using ts-tunnel transport for forwarding or synchronization.
-func init() {
-	// Register the ts-tunnel forwarding protocol handler
-	forwarding.ProtocolHandlers[Protocol_Tstunnel] = &forwardingprotocol.ProtocolHandler{}
+// ParseTSTunnelURL parses a tstunnel:// URL and converts it to a mutagen URL.
+// Format: tstunnel://<server-addr>/<path>?server-name=<value>&cert=<cert>&key=<key>[&ca=<ca>]
+func ParseTSTunnelURL(rawURL string, kind urlpkg.Kind) (*urlpkg.URL, error) {
+	// Check if this is a tstunnel URL
+	if !strings.HasPrefix(rawURL, "tstunnel://") {
+		// Not a tstunnel URL, parse normally
+		return urlpkg.Parse(rawURL, kind, true)
+	}
 
-	// Register the ts-tunnel synchronization protocol handler
-	synchronization.ProtocolHandlers[Protocol_Tstunnel] = &synchronizationprotocol.ProtocolHandler{}
+	// Parse the URL
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse tstunnel URL: %w", err)
+	}
+
+	// Extract parameters from query string
+	query := parsedURL.Query()
+	params := make(map[string]string)
+	for key, values := range query {
+		if len(values) > 0 {
+			params[key] = values[0]
+		}
+	}
+
+	// cert and key are optional - omit them for insecure dev/debug scenarios
+	// If one is provided, both must be provided
+	serverAddr := parsedURL.Host
+	if serverAddr == "" {
+		return nil, fmt.Errorf("tstunnel URL requires server-addr to be set")
+	}
+
+	certFile := params["cert"]
+	keyFile := params["key"]
+	if (certFile != "" && keyFile == "") || (certFile == "" && keyFile != "") {
+		return nil, fmt.Errorf("tstunnel URL requires both 'cert' and 'key' parameters or neither")
+	}
+
+	// Construct SNI from serverName and serverAddr domain.
+	port := parsedURL.Port()
+	if port == "" {
+		useTLS := params["cert"] != "" && params["key"] != ""
+		if useTLS {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil {
+		portNumber = 80
+	}
+
+	mutagenURL := &urlpkg.URL{
+		Kind:       kind,
+		Protocol:   Protocol_Tstunnel,
+		Host:       parsedURL.Hostname(),
+		Port:       (uint32)(portNumber),
+		Path:       parsedURL.Path,
+		Parameters: params,
+	}
+
+	return mutagenURL, nil
 }

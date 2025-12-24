@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/mutagen-io/mutagen/pkg/agent"
 	"github.com/mutagen-io/mutagen/pkg/forwarding"
@@ -13,6 +14,7 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/logging"
 	urlpkg "github.com/mutagen-io/mutagen/pkg/url"
 	forwardingurlpkg "github.com/mutagen-io/mutagen/pkg/url/forwarding"
+	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
 	tstunneltransport "github.com/teamycloud/tsctl/pkg/ts-tunnel/agent-transport"
 )
 
@@ -47,64 +49,20 @@ func (p *ProtocolHandler) Connect(
 	// Note: Protocol check would go here once tstunnel is added to Protocol enum
 
 	// Parse the target specification from the URL's Path component.
-	protocol, address, err := forwardingurlpkg.Parse(url.Path)
+	protocol, address, err := forwardingurlpkg.Parse(strings.TrimPrefix(url.Path, "/"))
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse target specification: %w", err)
 	}
 
-	// Extract tstunnel-specific parameters from URL.Parameters.
-	// Expected parameters:
-	// - endpoint: the HTTPS endpoint (e.g., "containers.tinyscale.net:443")
-	// - cert: path to client certificate file
-	// - key: path to client key file
-	// - ca: path to CA certificate file (optional)
-
-	endpoint := url.Parameters["endpoint"]
-	if endpoint == "" {
-		return nil, fmt.Errorf("tstunnel endpoint parameter is required")
-	}
-
-	certFile := url.Parameters["cert"]
-	if certFile == "" {
-		return nil, fmt.Errorf("tstunnel cert parameter is required")
-	}
-
-	keyFile := url.Parameters["key"]
-	if keyFile == "" {
-		return nil, fmt.Errorf("tstunnel key parameter is required")
-	}
-
-	// Optional parameters.
-	caFile := url.Parameters["ca"]
-
-	// Use url.Host as the host ID for SNI routing.
-	hostID := url.Host
-	if hostID == "" {
-		return nil, fmt.Errorf("host identifier is required (use hostname component of URL)")
-	}
-
-	// Build TLS configuration.
-	builder := tstunneltransport.NewTLSConfigBuilder().
-		WithClientCertificate(certFile, keyFile)
-
-	if caFile != "" {
-		builder = builder.WithCACertificate(caFile)
-	}
-
-	tlsConfig, err := builder.Build()
-	if err != nil {
-		return nil, fmt.Errorf("unable to create TLS configuration: %w", err)
-	}
-
 	// Create a tstunnel transport.
 	transport, err := tstunneltransport.NewTransport(tstunneltransport.TransportOptions{
-		Endpoint:  endpoint,
-		HostID:    hostID,
-		TLSConfig: tlsConfig,
-		CertFile:  certFile,
-		KeyFile:   keyFile,
-		CAFile:    caFile,
-		Prompter:  prompter,
+		ServerAddr: fmt.Sprintf("%s:%d", url.Host, url.Port),
+		ServerName: url.Parameters["server-name"],
+		CertFile:   url.Parameters["cert"],
+		KeyFile:    url.Parameters["key"],
+		CAFile:     url.Parameters["ca"],
+		Insecure:   url.Parameters["insecure"] != "",
+		Prompter:   prompter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unable to create tstunnel transport: %w", err)
@@ -145,9 +103,9 @@ func (p *ProtocolHandler) Connect(
 	return remote.NewEndpoint(logger, stream, version, configuration, protocol, address, source)
 }
 
-// Note: Protocol registration would be done in init() once Protocol_Tstunnel
-// is added to the Protocol enum in pkg/url/url.proto:
-//
-// func init() {
-// 	forwarding.ProtocolHandlers[urlpkg.Protocol_Tstunnel] = &protocolHandler{}
-// }
+// init registers the ts-tunnel protocol handlers with mutagen.
+// This must be called before using ts-tunnel transport for forwarding
+func init() {
+	// Register the ts-tunnel forwarding protocol handler
+	forwarding.ProtocolHandlers[ts_tunnel.Protocol_Tstunnel] = &ProtocolHandler{}
+}

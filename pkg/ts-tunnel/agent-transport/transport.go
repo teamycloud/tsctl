@@ -27,73 +27,88 @@ const (
 
 // tstunnelTransport implements the agent.Transport interface using mTLS-enabled TCP connections.
 type tstunnelTransport struct {
-	// endpoint is the HTTPS endpoint to connect to (e.g., "containers.tinyscale.net:443").
-	endpoint string
-	// hostID is the remote host identifier used in SNI (e.g., "abcdefg").
-	hostID string
-	// tlsConfig is the TLS configuration including client certificates.
-	tlsConfig *tls.Config
+	// serverAddr is the HTTPS serverAddr to connect to (e.g., "containers.tinyscale.net:443").
+	serverAddr string
+	// serverName is the remote host identifier used in SNI (optional).
+	serverName string
 	// certFile is the path to the client certificate file.
 	certFile string
 	// keyFile is the path to the client key file.
 	keyFile string
 	// caFile is the path to the CA certificate file (optional).
 	caFile string
+
+	insecure bool
+
+	tlsConfig *tls.Config
 	// prompter is the prompter identifier to use for prompting.
 	prompter string
 }
 
 // TransportOptions provides configuration options for creating a tstunnel transport.
 type TransportOptions struct {
-	// Endpoint is the HTTPS endpoint to connect to (host:port).
-	Endpoint string
-	// HostID is the remote host identifier for SNI routing.
-	HostID string
-	// TLSConfig is the TLS configuration including client certificates.
-	TLSConfig *tls.Config
+	// ServerAddr is the HTTPS serverAddr to connect to (host:port).
+	ServerAddr string
+	// ServerName is the remote host identifier for SNI routing.(optional)
+	ServerName string
 	// CertFile is the path to the client certificate file.
 	CertFile string
 	// KeyFile is the path to the client key file.
 	KeyFile string
 	// CAFile is the path to the CA certificate file (optional).
 	CAFile string
+
+	Insecure bool
+
 	// Prompter is the prompter identifier.
 	Prompter string
 }
 
 // NewTransport creates a new tstunnel transport using the specified options.
 func NewTransport(opts TransportOptions) (agent.Transport, error) {
+	var tlsCfg *tls.Config
+	var err error
+
 	// Validate required options.
-	if opts.Endpoint == "" {
-		return nil, errors.New("endpoint is required")
-	}
-	if opts.HostID == "" {
-		return nil, errors.New("host ID is required")
+	if opts.ServerAddr == "" {
+		return nil, errors.New("ServerAddr is required")
 	}
 
 	// TLSConfig is optional. If provided, ensure SNI is set correctly.
-	var tlsConfig *tls.Config
-	if opts.TLSConfig != nil {
-		tlsConfig = opts.TLSConfig.Clone()
-		if tlsConfig.ServerName == "" {
-			// Construct SNI from hostID and endpoint domain.
-			host, _, err := net.SplitHostPort(opts.Endpoint)
-			if err != nil {
-				// If no port, use the endpoint as-is.
-				host = opts.Endpoint
-			}
-			tlsConfig.ServerName = fmt.Sprintf("%s.%s", opts.HostID, host)
+	if opts.ServerName == "" {
+		// Construct SNI from serverName and serverAddr domain.
+		host, _, err := net.SplitHostPort(opts.ServerAddr)
+		if err != nil {
+			// If no port, use the serverAddr as-is.
+			host = opts.ServerAddr
+		}
+		opts.ServerName = host
+	}
+
+	if opts.CertFile != "" && opts.KeyFile != "" {
+		tlsCfgBuilder := NewTLSConfigBuilder()
+		tlsCfgBuilder.
+			WithServerName(opts.ServerName).
+			WithClientCertificate(opts.CertFile, opts.KeyFile).
+			WithCACertificate(opts.CAFile)
+		if opts.Insecure {
+			tlsCfgBuilder.WithInsecureSkipVerify()
+		}
+
+		tlsCfg, err = tlsCfgBuilder.Build()
+		if err != nil {
+			return nil, fmt.Errorf("unable to build TLS configuration: %w", err)
 		}
 	}
 
 	return &tstunnelTransport{
-		endpoint:  opts.Endpoint,
-		hostID:    opts.HostID,
-		tlsConfig: tlsConfig,
-		certFile:  opts.CertFile,
-		keyFile:   opts.KeyFile,
-		caFile:    opts.CAFile,
-		prompter:  opts.Prompter,
+		serverAddr: opts.ServerAddr,
+		certFile:   opts.CertFile,
+		keyFile:    opts.KeyFile,
+		caFile:     opts.CAFile,
+		insecure:   opts.Insecure,
+		tlsConfig:  tlsCfg,
+		prompter:   opts.Prompter,
 	}, nil
 }
 
@@ -130,7 +145,7 @@ func (t *tstunnelTransport) Copy(localPath, remoteName string) error {
 	if t.tlsConfig != nil {
 		scheme = "https"
 	}
-	copyURL := fmt.Sprintf("%s://%s/tinyscale/v1/host/copy?path=%s", scheme, t.endpoint, url.QueryEscape(remoteName))
+	copyURL := fmt.Sprintf("%s://%s/tinyscale/v1/host/copy?path=%s", scheme, t.serverAddr, url.QueryEscape(remoteName))
 
 	// Create HTTP POST request.
 	req, err := http.NewRequestWithContext(ctx, "POST", copyURL, file)
@@ -168,13 +183,12 @@ func (t *tstunnelTransport) Command(command string) (*exec.Cmd, error) {
 	}
 
 	// Build arguments according to host-exec command definition.
-	// Format: executable host-exec --server=<endpoint> --cert=<cert> --key=<key> [--ca=<ca>] [--server-name=<sni>] -- <command>
+	// Format: executable host-exec --serverAddr=<serverAddr> --cert=<cert> --key=<key> [--ca=<ca>] [--serverAddr-name=<sni>] -- <command>
 	args := []string{
 		"host-exec",
-		fmt.Sprintf("--server=%s", t.endpoint),
+		fmt.Sprintf("--server-addr=%s", t.serverAddr),
 	}
 
-	// Add TLS certificate paths.
 	if t.certFile != "" {
 		args = append(args, fmt.Sprintf("--cert=%s", t.certFile))
 	}
@@ -184,14 +198,16 @@ func (t *tstunnelTransport) Command(command string) (*exec.Cmd, error) {
 	if t.caFile != "" {
 		args = append(args, fmt.Sprintf("--ca=%s", t.caFile))
 	}
-
-	// Add server name for TLS verification.
-	if t.tlsConfig != nil && t.tlsConfig.ServerName != "" {
-		args = append(args, fmt.Sprintf("--server-name=%s", t.tlsConfig.ServerName))
+	if t.serverName != "" {
+		args = append(args, fmt.Sprintf("--server-name=%s", t.serverName))
+	}
+	if t.insecure {
+		args = append(args, "--insecure")
 	}
 
 	// Add the delimiter and the command to execute.
-	args = append(args, "--", command)
+	args = append(args, "--")
+	args = append(args, strings.Split(command, " ")...)
 
 	// Create the command.
 	cmd := exec.Command(execPath, args...)

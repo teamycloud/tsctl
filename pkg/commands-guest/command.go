@@ -152,7 +152,14 @@ func commandExists(cmd string) int {
 				return http.StatusForbidden
 			}
 		} else {
-			return http.StatusNotFound
+			// relative path to the current working directory
+			relativeInfo, err := os.Stat(cmd)
+			if err != nil {
+				return http.StatusNotFound
+			}
+			if relativeInfo.Mode()&0111 == 0 {
+				return http.StatusForbidden
+			}
 		}
 	}
 

@@ -18,8 +18,15 @@ import (
 	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/local"
 	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/ssh"
 
-	_ "github.com/teamycloud/tsctl/pkg/ts-tunnel"
+	_ "github.com/teamycloud/tsctl/pkg/ts-tunnel/forwarding-protocol"
+	_ "github.com/teamycloud/tsctl/pkg/ts-tunnel/synchronization-protocol"
 )
+
+//
+//TSTunnelServer   string // HTTPS endpoint (e.g., "containers.tinyscale.net:443")
+//TSTunnelCertFile string // Path to client certificate file
+//TSTunnelKeyFile  string // Path to client key file
+//TSTunnelCAFile   string // Path to CA certificate file (optional)
 
 func NewStartCommand() *cobra.Command {
 	var (
@@ -29,6 +36,11 @@ func NewStartCommand() *cobra.Command {
 		sshKeyPath   string
 		remoteDocker string
 		logLevelFlag string
+
+		tsTunnelServer   string // HTTPS endpoint (e.g., "containers.tinyscale.net:443")
+		tsTunnelCertFile string // Path to client certificate file
+		tsTunnelKeyFile  string // Path to client key file
+		tsTunnelCAFile   string // Path to CA certificate file (optional)
 	)
 
 	cmd := &cobra.Command{
@@ -59,6 +71,20 @@ func NewStartCommand() *cobra.Command {
 				SSHHost:       sshHost,
 				SSHKeyPath:    sshKeyPath,
 				RemoteDocker:  remoteDocker,
+			}
+
+			if tsTunnelServer != "" {
+				cfg.TransportType = docker_api_proxy.TransportTSTunnel
+				cfg.TSTunnelServer = tsTunnelServer
+
+				if tsTunnelCertFile != "" && tsTunnelKeyFile != "" {
+					cfg.TSTunnelCertFile = tsTunnelCertFile
+					cfg.TSTunnelKeyFile = tsTunnelKeyFile
+
+					if tsTunnelCAFile != "" {
+						cfg.TSTunnelCAFile = tsTunnelCAFile
+					}
+				}
 			}
 
 			bannerFormat := `
@@ -99,14 +125,6 @@ Starting TCP proxy with SSH transport...
 				errCh <- proxy.ListenAndServe()
 			}()
 
-			// Create and register the forwarding server.
-			//forwardingServer := forwardingsvc.NewServer(forwardingManager)
-			//forwardingsvc.RegisterForwardingServer(server, forwardingServer)
-			//
-			//// Create and register the synchronization server.
-			//synchronizationServer := synchronizationsvc.NewServer(synchronizationManager)
-			//synchronizationsvc.RegisterSynchronizationServer(server, synchronizationServer)
-
 			log.Println("Proxy started. Press Ctrl+C to stop.")
 			log.Printf("Use: export DOCKER_HOST=tcp://%s", cfg.ListenAddr)
 
@@ -130,6 +148,11 @@ Starting TCP proxy with SSH transport...
 	cmd.Flags().StringVar(&sshKeyPath, "ssh-key", os.Getenv("HOME")+"/.ssh/id_rsa", "Path to SSH private key")
 	cmd.Flags().StringVar(&remoteDocker, "remote-docker", "unix:///var/run/docker.sock", "Remote Docker socket URL")
 	cmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level")
+
+	cmd.Flags().StringVar(&tsTunnelServer, "ts-server", "", "Tinyscale server address")
+	cmd.Flags().StringVar(&tsTunnelCertFile, "ts-cert", "", "Path to mTLS certificate")
+	cmd.Flags().StringVar(&tsTunnelKeyFile, "ts-key", "", "Path to mTLS private key")
+	cmd.Flags().StringVar(&tsTunnelCAFile, "ts-ca", "", "Path to accepted Tinyscale CA certificate")
 
 	return cmd
 }

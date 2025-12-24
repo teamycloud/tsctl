@@ -12,6 +12,7 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/endpoint/remote"
 	urlpkg "github.com/mutagen-io/mutagen/pkg/url"
+	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
 	tstunneltransport "github.com/teamycloud/tsctl/pkg/ts-tunnel/agent-transport"
 )
 
@@ -45,59 +46,15 @@ func (h *ProtocolHandler) Connect(
 	}
 	// Note: Protocol check would go here once tstunnel is added to Protocol enum
 
-	// Extract tstunnel-specific parameters from URL.Parameters.
-	// Expected parameters:
-	// - endpoint: the HTTPS endpoint (e.g., "containers.tinyscale.net:443")
-	// - cert: path to client certificate file
-	// - key: path to client key file
-	// - ca: path to CA certificate file (optional)
-
-	endpoint := url.Parameters["endpoint"]
-	if endpoint == "" {
-		return nil, fmt.Errorf("tstunnel endpoint parameter is required")
-	}
-
-	certFile := url.Parameters["cert"]
-	if certFile == "" {
-		return nil, fmt.Errorf("tstunnel cert parameter is required")
-	}
-
-	keyFile := url.Parameters["key"]
-	if keyFile == "" {
-		return nil, fmt.Errorf("tstunnel key parameter is required")
-	}
-
-	// Optional parameters.
-	caFile := url.Parameters["ca"]
-
-	// Use url.Host as the host ID for SNI routing.
-	hostID := url.Host
-	if hostID == "" {
-		return nil, fmt.Errorf("host identifier is required (use hostname component of URL)")
-	}
-
-	// Build TLS configuration.
-	builder := tstunneltransport.NewTLSConfigBuilder().
-		WithClientCertificate(certFile, keyFile)
-
-	if caFile != "" {
-		builder = builder.WithCACertificate(caFile)
-	}
-
-	tlsConfig, err := builder.Build()
-	if err != nil {
-		return nil, fmt.Errorf("unable to create TLS configuration: %w", err)
-	}
-
 	// Create a tstunnel transport.
 	transport, err := tstunneltransport.NewTransport(tstunneltransport.TransportOptions{
-		Endpoint:  endpoint,
-		HostID:    hostID,
-		TLSConfig: tlsConfig,
-		CertFile:  certFile,
-		KeyFile:   keyFile,
-		CAFile:    caFile,
-		Prompter:  prompter,
+		ServerAddr: fmt.Sprintf("%s:%d", url.Host, url.Port),
+		ServerName: url.Parameters["server-name"],
+		CertFile:   url.Parameters["cert"],
+		KeyFile:    url.Parameters["key"],
+		CAFile:     url.Parameters["ca"],
+		Insecure:   url.Parameters["insecure"] != "",
+		Prompter:   prompter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unable to create tstunnel transport: %w", err)
@@ -138,9 +95,9 @@ func (h *ProtocolHandler) Connect(
 	return remote.NewEndpoint(logger, stream, url.Path, session, version, configuration, alpha)
 }
 
-// Note: Protocol registration would be done in init() once Protocol_Tstunnel
-// is added to the Protocol enum in pkg/url/url.proto:
-//
-// func init() {
-// 	synchronization.ProtocolHandlers[urlpkg.Protocol_Tstunnel] = &protocolHandler{}
-// }
+// init registers the ts-tunnel protocol handlers with mutagen.
+// This must be called before using ts-tunnel transport for synchronization.
+func init() {
+	// Register the ts-tunnel synchronization protocol handler
+	synchronization.ProtocolHandlers[ts_tunnel.Protocol_Tstunnel] = &ProtocolHandler{}
+}

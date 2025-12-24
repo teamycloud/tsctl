@@ -23,6 +23,7 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/hashing"
 	"github.com/mutagen-io/mutagen/pkg/url"
+	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
 )
 
 // BindMount represents a volume mount from local to remote
@@ -414,8 +415,9 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, 
 
 	// Build destination URL based on transport type
 	if m.sshConfig.TransportType == TransportTSTunnel {
-		syncDest := fmt.Sprintf("tstunnel://%s?path=%s",
-			m.sshConfig.TSTunnelServer, neturl.QueryEscape(remotePath),
+		syncDest := fmt.Sprintf("tstunnel://%s%s?a=a",
+			m.sshConfig.TSTunnelServer,
+			remotePath,
 		)
 		if m.sshConfig.TSTunnelCertFile != "" && m.sshConfig.TSTunnelKeyFile != "" {
 			syncDest = syncDest + "&cert=" + neturl.QueryEscape(m.sshConfig.TSTunnelCertFile) + "&key=" + neturl.QueryEscape(m.sshConfig.TSTunnelKeyFile)
@@ -423,7 +425,7 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, 
 				syncDest = syncDest + "&ca=" + neturl.QueryEscape(m.sshConfig.TSTunnelCAFile)
 			}
 		}
-		beta, err = ParseTSTunnelURL(syncDest, url.Kind_Synchronization)
+		beta, err = ts_tunnel.ParseTSTunnelURL(syncDest, url.Kind_Synchronization)
 	} else {
 		// Default to SSH: user@host:port:path
 		syncDest := fmt.Sprintf("%s@%s:%s",

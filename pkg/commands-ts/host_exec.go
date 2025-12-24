@@ -49,8 +49,8 @@ func NewHostExecCommand() *cobra.Command {
 Use -- to separate ts flags from the command to execute and its arguments.
 
 Example:
-  ts host-exec --server=host:port -- ls -la
-  ts host-exec --server=host:port --insecure -- bash -c "echo hello"`,
+  tsctl host-exec --server=host:port -- ls -la
+  tsctl host-exec --server=host:port --insecure -- bash -c "echo hello"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// At this point, args contains everything after "--"
 			// Cobra automatically handles the "--" delimiter
@@ -74,7 +74,7 @@ Example:
 	}
 
 	// Add flags
-	cmd.Flags().StringVar(&serverAddr, "server", "", "Server address (ip:port or hostname:port)")
+	cmd.Flags().StringVar(&serverAddr, "server-addr", "", "Server address (ip:port or hostname:port)")
 	cmd.Flags().StringVar(&clientCertFile, "cert", "", "Client certificate file")
 	cmd.Flags().StringVar(&clientKeyFile, "key", "", "Client key file")
 	cmd.Flags().StringVar(&caCertFile, "ca", "", "CA certificate file")

@@ -29,19 +29,19 @@ func (b *TLSConfigBuilder) WithClientCertificate(certFile, keyFile string) *TLSC
 	return b
 }
 
-// WithCACertificate sets the CA certificate file for server verification.
+// WithCACertificate sets the CA certificate file for serverAddr verification.
 func (b *TLSConfigBuilder) WithCACertificate(caCertFile string) *TLSConfigBuilder {
 	b.caCertFile = caCertFile
 	return b
 }
 
-// WithServerName sets the expected server name for SNI and certificate verification.
+// WithServerName sets the expected serverAddr name for SNI and certificate verification.
 func (b *TLSConfigBuilder) WithServerName(serverName string) *TLSConfigBuilder {
 	b.serverName = serverName
 	return b
 }
 
-// WithInsecureSkipVerify disables server certificate verification (not recommended for production).
+// WithInsecureSkipVerify disables serverAddr certificate verification (not recommended for production).
 func (b *TLSConfigBuilder) WithInsecureSkipVerify() *TLSConfigBuilder {
 	b.insecure = true
 	return b

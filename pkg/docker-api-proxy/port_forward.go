@@ -20,6 +20,7 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/selection"
 	forwardingsvc "github.com/mutagen-io/mutagen/pkg/service/forwarding"
 	"github.com/mutagen-io/mutagen/pkg/url"
+	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
 )
 
 // PortBinding represents a port mapping from local to remote
@@ -256,7 +257,7 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 
 	// Build destination URL based on transport type
 	if m.sshConfig.TransportType == TransportTSTunnel {
-		forwardDest := fmt.Sprintf("tstunnel://%s?protocol=tcp&host=localhost&port=%s",
+		forwardDest := fmt.Sprintf("tstunnel://%s/tcp:localhost:%s?a=a",
 			m.sshConfig.TSTunnelServer,
 			binding.HostPort,
 		)
@@ -267,7 +268,7 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 			}
 		}
 
-		destination, err = ParseTSTunnelURL(forwardDest, url.Kind_Forwarding)
+		destination, err = ts_tunnel.ParseTSTunnelURL(forwardDest, url.Kind_Forwarding)
 	} else {
 		// Default to SSH: user@host:port:tcp:localhost:<port>
 		forwardDest := fmt.Sprintf("%s@%s:tcp:localhost:%s",
