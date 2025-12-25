@@ -134,7 +134,7 @@ func (t *tstunnelTransport) Copy(localPath, remoteName string) error {
 	if t.tlsConfig != nil || ts_tunnel.IsTLSPort(t.serverAddr) {
 		scheme = "https"
 	}
-	copyURL := fmt.Sprintf("%s://%s/tinyscale/v1/host/copy?path=%s", scheme, t.serverAddr, url.QueryEscape(remoteName))
+	copyURL := fmt.Sprintf("%s://%s/tinyscale/v1/host-exec/copy?path=%s", scheme, t.serverAddr, url.QueryEscape(remoteName))
 
 	// Create HTTP POST request.
 	req, err := http.NewRequestWithContext(ctx, "POST", copyURL, file)
