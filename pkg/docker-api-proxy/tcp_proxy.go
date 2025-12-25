@@ -53,25 +53,19 @@ type TCPProxy struct {
 
 // NewTCPProxy creates a new TCP proxy instance and establishes SSH connection
 func NewTCPProxy(cfg Config, forwardingManager *forwarding.Manager, synchronizationManager *synchronization.Manager) (*TCPProxy, error) {
-	// Create SSH client
 	sshClient, err := NewSSHClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create ssh client: %w", err)
 	}
 
 	prompter := &cmd.StatusLinePrompter{Printer: &cmd.StatusLinePrinter{}}
-	// Create a unique identifier for the prompter.
 	promptIdentifier, err := identifier.New(identifier.PrefixPrompter)
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate prompter identifier: %w", err)
 	}
-
-	// Register the prompter.
 	if err := prompting.RegisterPrompterWithIdentifier(promptIdentifier, prompter); err != nil {
 		return nil, fmt.Errorf("unable to register prompter: %w", err)
 	}
-
-	// todo: detect if existing sessions still apply
 
 	// Create port forward manager
 	portForwardMgr := NewPortForwardManager(cfg, forwardingManager)

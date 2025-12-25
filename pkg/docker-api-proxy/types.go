@@ -26,4 +26,5 @@ type Config struct {
 	TSTunnelCertFile string // Path to client certificate file
 	TSTunnelKeyFile  string // Path to client key file
 	TSTunnelCAFile   string // Path to CA certificate file (optional)
+	TSInsecure       bool   // Skip TLS Verify
 }

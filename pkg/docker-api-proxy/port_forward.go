@@ -44,16 +44,16 @@ type PortForwardManager struct {
 	mu                sync.RWMutex
 	containers        map[*http.Request]*ContainerPorts // httpPort -> ports
 	containerPorts    map[string]*ContainerPorts        // containerID -> ports
-	sshConfig         Config
+	transportConfig   Config
 	mutagenForwardMgr *forwarding.Manager
 }
 
 // NewPortForwardManager creates a new port forward manager
-func NewPortForwardManager(sshConfig Config, forwardingManager *forwarding.Manager) *PortForwardManager {
+func NewPortForwardManager(transportConfig Config, forwardingManager *forwarding.Manager) *PortForwardManager {
 	return &PortForwardManager{
 		containers:        make(map[*http.Request]*ContainerPorts),
 		containerPorts:    make(map[string]*ContainerPorts),
-		sshConfig:         sshConfig,
+		transportConfig:   transportConfig,
 		mutagenForwardMgr: forwardingManager,
 	}
 }
@@ -256,23 +256,26 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 	var err error
 
 	// Build destination URL based on transport type
-	if m.sshConfig.TransportType == TransportTSTunnel {
+	if m.transportConfig.TransportType == TransportTSTunnel {
 		forwardDest := fmt.Sprintf("tstunnel://%s/tcp:localhost:%s?a=a",
-			m.sshConfig.TSTunnelServer,
+			m.transportConfig.TSTunnelServer,
 			binding.HostPort,
 		)
-		if m.sshConfig.TSTunnelCertFile != "" && m.sshConfig.TSTunnelKeyFile != "" {
-			forwardDest = forwardDest + "&cert=" + neturl.QueryEscape(m.sshConfig.TSTunnelCertFile) + "&key=" + neturl.QueryEscape(m.sshConfig.TSTunnelKeyFile)
-			if m.sshConfig.TSTunnelCAFile != "" {
-				forwardDest = forwardDest + "&ca=" + neturl.QueryEscape(m.sshConfig.TSTunnelCAFile)
-			}
+		if m.transportConfig.TSTunnelCertFile != "" && m.transportConfig.TSTunnelKeyFile != "" {
+			forwardDest = forwardDest + "&cert=" + neturl.QueryEscape(m.transportConfig.TSTunnelCertFile) + "&key=" + neturl.QueryEscape(m.transportConfig.TSTunnelKeyFile)
 		}
 
+		if m.transportConfig.TSTunnelCAFile != "" {
+			forwardDest = forwardDest + "&ca=" + neturl.QueryEscape(m.transportConfig.TSTunnelCAFile)
+		}
+		if m.transportConfig.TSInsecure {
+			forwardDest = forwardDest + "&insecure=true"
+		}
 		destination, err = ts_tunnel.ParseTSTunnelURL(forwardDest, url.Kind_Forwarding)
 	} else {
 		// Default to SSH: user@host:port:tcp:localhost:<port>
 		forwardDest := fmt.Sprintf("%s@%s:tcp:localhost:%s",
-			m.sshConfig.SSHUser, m.sshConfig.SSHHost, binding.HostPort)
+			m.transportConfig.SSHUser, m.transportConfig.SSHHost, binding.HostPort)
 		destination, err = url.Parse(forwardDest, url.Kind_Forwarding, true)
 	}
 	if err != nil {
@@ -284,12 +287,10 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 		return "", fmt.Errorf("invalid forwarding source: %w", err)
 	}
 
-	// Validate the name.
 	if err := selection.EnsureNameValid(pfCreateConfiguration.name); err != nil {
 		return "", fmt.Errorf("invalid session name: %w", err)
 	}
 
-	// Parse, validate, and record labels.
 	labels := make(map[string]string)
 	for _, label := range pfCreateConfiguration.labels {
 		components := strings.SplitN(label, "=", 2)

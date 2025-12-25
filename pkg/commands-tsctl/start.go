@@ -1,4 +1,4 @@
-package commands_ts
+package commands_tsctl
 
 import (
 	"fmt"
@@ -22,12 +22,6 @@ import (
 	_ "github.com/teamycloud/tsctl/pkg/ts-tunnel/synchronization-protocol"
 )
 
-//
-//TSTunnelServer   string // HTTPS endpoint (e.g., "containers.tinyscale.net:443")
-//TSTunnelCertFile string // Path to client certificate file
-//TSTunnelKeyFile  string // Path to client key file
-//TSTunnelCAFile   string // Path to CA certificate file (optional)
-
 func NewStartCommand() *cobra.Command {
 	var (
 		listenAddr   string
@@ -41,12 +35,13 @@ func NewStartCommand() *cobra.Command {
 		tsTunnelCertFile string // Path to client certificate file
 		tsTunnelKeyFile  string // Path to client key file
 		tsTunnelCAFile   string // Path to CA certificate file (optional)
+		tsTunnelInsecure bool   // whether can we skip tls verification
 	)
 
 	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start the TCP proxy server",
-		Long:  `Start the TCP proxy server that forwards Docker API calls to a remote Docker daemon over SSH.`,
+		Short: "Start the local proxy for Tinyscale Container API",
+		Long:  `Start the TCP proxy server that forwards Container API calls to a remote daemon over running Tinyscale`,
 		Run: func(cmd *cobra.Command, args []string) {
 			// Create the root logger.
 			logLevel := logging.LevelInfo
@@ -81,10 +76,12 @@ func NewStartCommand() *cobra.Command {
 					cfg.TSTunnelCertFile = tsTunnelCertFile
 					cfg.TSTunnelKeyFile = tsTunnelKeyFile
 
-					if tsTunnelCAFile != "" {
-						cfg.TSTunnelCAFile = tsTunnelCAFile
-					}
 				}
+
+				if tsTunnelCAFile != "" {
+					cfg.TSTunnelCAFile = tsTunnelCAFile
+				}
+				cfg.TSInsecure = tsTunnelInsecure
 			}
 
 			bannerFormat := `
@@ -95,14 +92,12 @@ Starting TCP proxy with SSH transport...
 `
 			logger.Infof(bannerFormat, cfg.ListenAddr, cfg.SSHUser, cfg.SSHHost, cfg.RemoteDocker)
 
-			// todo: list current sessions and get their container IDs (get their labels and try to check if container is still running)
 			forwardingManager, err := forwarding.NewManager(logger.Sublogger("forward"))
 			if err != nil {
 				panic(fmt.Sprintf("unable to create forwarding session manager: %v", err))
 			}
 			defer forwardingManager.Shutdown()
 
-			// Create a synchronization session manager and defer its shutdown.
 			synchronizationManager, err := synchronization.NewManager(logger.Sublogger("sync"))
 			if err != nil {
 				panic(fmt.Sprintf("unable to create synchronization session manager: %v", err))
@@ -128,7 +123,6 @@ Starting TCP proxy with SSH transport...
 			log.Println("Proxy started. Press Ctrl+C to stop.")
 			log.Printf("Use: export DOCKER_HOST=tcp://%s", cfg.ListenAddr)
 
-			// Wait for shutdown signal or error
 			select {
 			case <-sigCh:
 				log.Println("Shutting down gracefully...")
@@ -153,6 +147,7 @@ Starting TCP proxy with SSH transport...
 	cmd.Flags().StringVar(&tsTunnelCertFile, "ts-cert", "", "Path to mTLS certificate")
 	cmd.Flags().StringVar(&tsTunnelKeyFile, "ts-key", "", "Path to mTLS private key")
 	cmd.Flags().StringVar(&tsTunnelCAFile, "ts-ca", "", "Path to accepted Tinyscale CA certificate")
+	cmd.Flags().BoolVar(&tsTunnelInsecure, "ts-insecure", false, "Skip tls verification when connecting to Tinyscale server")
 
 	return cmd
 }

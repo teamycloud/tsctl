@@ -1,4 +1,4 @@
-package commands_ts
+package commands_tsctl
 
 import (
 	"bufio"
@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
 )
 
 type CommandRequest struct {
@@ -22,11 +23,10 @@ type CommandRequest struct {
 	Envs    []string `json:"envs,omitempty"`
 }
 
-type TLSConfig struct {
+type TS_TLSConfig struct {
 	clientCertFile string
 	clientKeyFile  string
 	caCertFile     string
-	serverName     string
 	insecure       bool
 }
 
@@ -36,7 +36,6 @@ func NewHostExecCommand() *cobra.Command {
 		clientCertFile string
 		clientKeyFile  string
 		caCertFile     string
-		serverName     string
 		insecure       bool
 		envs           []string
 	)
@@ -61,11 +60,10 @@ Example:
 			command := args[0]
 			cmdArgs := args[1:]
 
-			tlsConfig := TLSConfig{
+			tlsConfig := TS_TLSConfig{
 				clientCertFile: clientCertFile,
 				clientKeyFile:  clientKeyFile,
 				caCertFile:     caCertFile,
-				serverName:     serverName,
 				insecure:       insecure,
 			}
 
@@ -78,7 +76,6 @@ Example:
 	cmd.Flags().StringVar(&clientCertFile, "cert", "", "Client certificate file")
 	cmd.Flags().StringVar(&clientKeyFile, "key", "", "Client key file")
 	cmd.Flags().StringVar(&caCertFile, "ca", "", "CA certificate file")
-	cmd.Flags().StringVar(&serverName, "server-name", "", "Server name for TLS verification")
 	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Environment variable (can be repeated, format: KEY=VALUE)")
 
@@ -87,8 +84,7 @@ Example:
 	return cmd
 }
 
-func executeCommand(serverAddr, command string, args []string, envs []string, tlsCfg TLSConfig) error {
-	// Create the command request
+func executeCommand(serverAddr, command string, args []string, envs []string, tlsCfg TS_TLSConfig) error {
 	cmdReq := CommandRequest{
 		Command: command,
 		Args:    args,
@@ -102,17 +98,11 @@ func executeCommand(serverAddr, command string, args []string, envs []string, tl
 		os.Exit(-1)
 	}
 
-	// Determine if we should use TLS
-	useTLS := tlsCfg.clientCertFile != "" || tlsCfg.caCertFile != "" || tlsCfg.insecure
-
-	// Create the HTTP request
-	var scheme string
+	useTLS := ts_tunnel.UseTLS(tlsCfg.clientCertFile, tlsCfg.clientKeyFile, tlsCfg.caCertFile, tlsCfg.insecure) || ts_tunnel.IsTLSPort(serverAddr)
+	scheme := "http"
 	if useTLS {
 		scheme = "https"
-	} else {
-		scheme = "http"
 	}
-
 	url := fmt.Sprintf("%s://%s/tinyscale/v1/host/command", scheme, serverAddr)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonData))
 	if err != nil {
@@ -128,7 +118,7 @@ func executeCommand(serverAddr, command string, args []string, envs []string, tl
 	// Create TLS config if needed
 	var netConn net.Conn
 	if useTLS {
-		tlsClientConfig, err := buildTLSConfig(tlsCfg)
+		tlsClientConfig, err := buildTLSConfig(tlsCfg, serverAddr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to build TLS config: %v\n", err)
 			os.Exit(-1)
@@ -200,15 +190,12 @@ func executeCommand(serverAddr, command string, args []string, envs []string, tl
 	return nil
 }
 
-func buildTLSConfig(cfg TLSConfig) (*tls.Config, error) {
+func buildTLSConfig(cfg TS_TLSConfig, serverAddr string) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: cfg.insecure,
 	}
 
-	// Set server name if provided
-	if cfg.serverName != "" {
-		tlsConfig.ServerName = cfg.serverName
-	}
+	tlsConfig.ServerName = ts_tunnel.URLHostName(serverAddr)
 
 	// Load client certificate if provided
 	if cfg.clientCertFile != "" && cfg.clientKeyFile != "" {

@@ -16,6 +16,7 @@ package ts_tunnel
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -30,7 +31,7 @@ const (
 )
 
 // ParseTSTunnelURL parses a tstunnel:// URL and converts it to a mutagen URL.
-// Format: tstunnel://<server-addr>/<path>?server-name=<value>&cert=<cert>&key=<key>[&ca=<ca>]
+// Format: tstunnel://<server-addr>/<path>?cert=<cert>&key=<key>[&ca=<ca>]
 func ParseTSTunnelURL(rawURL string, kind urlpkg.Kind) (*urlpkg.URL, error) {
 	// Check if this is a tstunnel URL
 	if !strings.HasPrefix(rawURL, "tstunnel://") {
@@ -69,8 +70,7 @@ func ParseTSTunnelURL(rawURL string, kind urlpkg.Kind) (*urlpkg.URL, error) {
 	// Construct SNI from serverName and serverAddr domain.
 	port := parsedURL.Port()
 	if port == "" {
-		useTLS := params["cert"] != "" && params["key"] != ""
-		if useTLS {
+		if UseTLS(certFile, keyFile, params["ca"], params["insecure"] != "") {
 			port = "443"
 		} else {
 			port = "80"
@@ -91,4 +91,36 @@ func ParseTSTunnelURL(rawURL string, kind urlpkg.Kind) (*urlpkg.URL, error) {
 	}
 
 	return mutagenURL, nil
+}
+
+func UseTLS(clientCert, clientKey, caCert string, insecure bool) bool {
+	return (clientCert != "" && clientKey != "") || caCert != "" || insecure
+}
+
+func IsTLSPort(serverAddr string) bool {
+	_, p, err := net.SplitHostPort(serverAddr)
+	if err != nil {
+		return false
+	}
+	return p == "443"
+}
+
+func URLHostName(serverAddr string) string {
+	h, _, err := net.SplitHostPort(serverAddr)
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
+func URLPort(serverAddr string) int {
+	_, p, err := net.SplitHostPort(serverAddr)
+	if err != nil {
+		return 0
+	}
+	pn, err := strconv.Atoi(p)
+	if err != nil {
+		return 0
+	}
+	return pn
 }

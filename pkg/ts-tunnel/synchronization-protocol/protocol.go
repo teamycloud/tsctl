@@ -49,7 +49,6 @@ func (h *ProtocolHandler) Connect(
 	// Create a tstunnel transport.
 	transport, err := tstunneltransport.NewTransport(tstunneltransport.TransportOptions{
 		ServerAddr: fmt.Sprintf("%s:%d", url.Host, url.Port),
-		ServerName: url.Parameters["server-name"],
 		CertFile:   url.Parameters["cert"],
 		KeyFile:    url.Parameters["key"],
 		CAFile:     url.Parameters["ca"],

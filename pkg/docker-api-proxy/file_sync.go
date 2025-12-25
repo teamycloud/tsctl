@@ -45,7 +45,7 @@ type FileSyncManager struct {
 	mu              sync.RWMutex
 	containers      map[*http.Request]*ContainerMounts // httpReq -> mounts
 	containerMounts map[string]*ContainerMounts        // containerID -> mounts
-	sshConfig       Config
+	transportConfig Config
 	mutagenSyncMgr  *synchronization.Manager
 }
 
@@ -54,7 +54,7 @@ func NewFileSyncManager(sshConfig Config, synchronizationManager *synchronizatio
 	return &FileSyncManager{
 		containers:      make(map[*http.Request]*ContainerMounts),
 		containerMounts: make(map[string]*ContainerMounts),
-		sshConfig:       sshConfig,
+		transportConfig: sshConfig,
 		mutagenSyncMgr:  synchronizationManager,
 	}
 }
@@ -414,22 +414,26 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, 
 	var beta *url.URL
 
 	// Build destination URL based on transport type
-	if m.sshConfig.TransportType == TransportTSTunnel {
+	if m.transportConfig.TransportType == TransportTSTunnel {
 		syncDest := fmt.Sprintf("tstunnel://%s%s?a=a",
-			m.sshConfig.TSTunnelServer,
+			m.transportConfig.TSTunnelServer,
 			remotePath,
 		)
-		if m.sshConfig.TSTunnelCertFile != "" && m.sshConfig.TSTunnelKeyFile != "" {
-			syncDest = syncDest + "&cert=" + neturl.QueryEscape(m.sshConfig.TSTunnelCertFile) + "&key=" + neturl.QueryEscape(m.sshConfig.TSTunnelKeyFile)
-			if m.sshConfig.TSTunnelCAFile != "" {
-				syncDest = syncDest + "&ca=" + neturl.QueryEscape(m.sshConfig.TSTunnelCAFile)
-			}
+		if m.transportConfig.TSTunnelCertFile != "" && m.transportConfig.TSTunnelKeyFile != "" {
+			syncDest = syncDest + "&cert=" + neturl.QueryEscape(m.transportConfig.TSTunnelCertFile) + "&key=" + neturl.QueryEscape(m.transportConfig.TSTunnelKeyFile)
+		}
+
+		if m.transportConfig.TSTunnelCAFile != "" {
+			syncDest = syncDest + "&ca=" + neturl.QueryEscape(m.transportConfig.TSTunnelCAFile)
+		}
+		if m.transportConfig.TSInsecure {
+			syncDest = syncDest + "&insecure=true"
 		}
 		beta, err = ts_tunnel.ParseTSTunnelURL(syncDest, url.Kind_Synchronization)
 	} else {
 		// Default to SSH: user@host:port:path
 		syncDest := fmt.Sprintf("%s@%s:%s",
-			m.sshConfig.SSHUser, m.sshConfig.SSHHost, remotePath)
+			m.transportConfig.SSHUser, m.transportConfig.SSHHost, remotePath)
 		beta, err = url.Parse(syncDest, url.Kind_Synchronization, true)
 	}
 
@@ -437,12 +441,10 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, 
 		return "", fmt.Errorf("invalid sync destination: %w", err)
 	}
 
-	// Validate the name.
 	if err := selection.EnsureNameValid(fsCreateConfiguration.name); err != nil {
 		return "", fmt.Errorf("invalid session name: %w", err)
 	}
 
-	// Parse, validate, and record labels.
 	labels := make(map[string]string)
 	for _, label := range fsCreateConfiguration.labels {
 		components := strings.SplitN(label, "=", 2)
