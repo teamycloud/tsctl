@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strings"
 	"sync"
@@ -183,8 +182,9 @@ func (p *Proxy) handleConnection(conn net.Conn) {
 
 	p.logger.Infof("routing user %s to backend %s", identity.UserID, target.BackendAddr)
 
-	// Connect to backend
-	if err := p.proxyToBackend(tlsConn, target.BackendAddr); err != nil {
+	// Use HTTP-aware routing
+	router := NewHTTPRouter(target.BackendAddr)
+	if err := router.RouteAndProxy(tlsConn); err != nil {
 		p.logger.Errorf("proxy failed: %v", err)
 		return
 	}
@@ -210,47 +210,6 @@ func (p *Proxy) parseConnectIDFromSNI(sni string) (string, error) {
 	}
 
 	return connectID, nil
-}
-
-// proxyToBackend proxies the connection to the backend server
-func (p *Proxy) proxyToBackend(clientConn net.Conn, backendAddr string) error {
-	// Connect to backend
-	backendConn, err := net.DialTimeout("tcp", backendAddr, 10*time.Second)
-	if err != nil {
-		return fmt.Errorf("failed to connect to backend %s: %w", backendAddr, err)
-	}
-	defer backendConn.Close()
-
-	// Bidirectional copy
-	errChan := make(chan error, 2)
-
-	// Client -> Backend
-	go func() {
-		_, err := io.Copy(backendConn, clientConn)
-		errChan <- err
-	}()
-
-	// Backend -> Client
-	go func() {
-		_, err := io.Copy(clientConn, backendConn)
-		errChan <- err
-	}()
-
-	// Wait for either direction to complete
-	err = <-errChan
-
-	// Close both connections to terminate the other goroutine
-	clientConn.Close()
-	backendConn.Close()
-
-	// Wait for the second goroutine
-	<-errChan
-
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
-		return fmt.Errorf("proxy error: %w", err)
-	}
-
-	return nil
 }
 
 // Stop stops the proxy server
