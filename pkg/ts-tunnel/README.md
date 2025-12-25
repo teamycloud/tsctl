@@ -1,302 +1,200 @@
-# Tstunnel (mTLS TCP Tunnel) 实现总结
+# TS-Tunnel (mTLS TCP Tunnel) 实现文档
 
 ## 概述
 
-本项目为 Mutagen 实现了一个基于 mTLS 的 TCP 隧道传输协议（tstunnel），用于替代 SSH 作为 remote-docker-agent 项目的底层通信机制。
+TS-Tunnel 是为 tsctl 项目实现的基于 mTLS 的 TCP 隧道传输协议，用于替代传统 SSH 作为远程通信机制。它集成了 Mutagen 的转发和同步功能，为 Docker 远程访问提供安全、灵活的传输层。
 
-## 已创建的文件
+## 核心特性
 
-### 核心实现
+- ✅ **mTLS 双向认证** - 客户端和服务器相互验证
+- ✅ **SNI 路由支持** - 通过 SNI 区分不同远程主机
+- ✅ **与 Mutagen 深度集成** - 支持端口转发和文件同步
+- ✅ **HTTP UPGRADE 机制** - 建立原始 TCP 流
+- ✅ **灵活的证书管理** - 支持自定义 CA 和证书
+- ✅ **TLS 配置可选** - 支持开发时跳过验证
 
-1. **`pkg/agent/transport/tstunnel/doc.go`**
-   - Package 文档
+## 架构设计
 
-2. **`pkg/agent/transport/tstunnel/transport.go`**
-   - 实现 `agent.Transport` 接口
-   - 提供 mTLS 连接和 HTTP UPGRADE 功能
-   - 包含 `Copy()` 和 `Command()` 方法实现
+```
+┌────────────────┐           ┌─────────────────────┐           ┌──────────────┐
+│  tsctl Client  │  mTLS     │  TS-Tunnel Server   │           │ Remote Host  │
+│                ├──────────→│  (containers.ts.net)│──────────→│  + guest     │
+│  - Transport   │           │  - SNI Router       │           │  + Docker    │
+│  - Protocols   │           │  - HTTP UPGRADE     │           └──────────────┘
+└────────────────┘           └─────────────────────┘
+       │
+       ├─ agent-transport/     → Mutagen Transport 实现
+       ├─ forwarding-protocol/ → 端口转发协议处理器
+       └─ synchronization-protocol/ → 文件同步协议处理器
+```
 
-3. **`pkg/agent/transport/tstunnel/tls.go`**
-   - TLS 配置构建器
-   - 便捷的证书加载函数
+## 组件说明
 
-4. **`pkg/forwarding/protocols/tstunnel/doc.go`**
-   - Forwarding protocol handler 文档
+### 1. URL 解析 (`url.go`)
 
-5. **`pkg/forwarding/protocols/tstunnel/protocol.go`**
-   - 实现 `forwarding.ProtocolHandler` 接口
-   - 支持端口转发场景
+解析 `tstunnel://` URL 格式：
 
-6. **`pkg/synchronization/protocols/tstunnel/doc.go`**
-   - Synchronization protocol handler 文档
+```
+tstunnel://server-host:port/path?cert=...&key=...&ca=...&insecure=true
+```
 
-7. **`pkg/synchronization/protocols/tstunnel/protocol.go`**
-   - 实现 `synchronization.ProtocolHandler` 接口
-   - 支持文件同步场景
+**参数说明：**
+- `server-host:port` - 服务器地址（支持自动端口推断）
+- `path` - 目标路径（转发或同步）
+- `cert` - 客户端证书路径（可选，与 key 配对）
+- `key` - 客户端私钥路径（可选，与 cert 配对）
+- `ca` - CA 证书路径（可选）
+- `insecure` - 跳过 TLS 验证（仅开发用）
 
-### 文档
+**关键函数：**
+- `ParseTSTunnelURL()` - 解析 URL 并转换为 Mutagen URL 结构
+- `UseTLS()` - 判断是否使用 TLS
+- `IsTLSPort()` - 判断端口是否为 443
 
-8. **`pkg/agent/transport/tstunnel/IMPLEMENTATION.md`**
-   - 完整的实现方案文档
-   - 架构说明
-   - 使用示例
-   - TCP 无法提供的能力及解决方案
-   - 服务器端要求
+### 2. Agent Transport (`agent-transport/`)
 
-9. **`pkg/agent/transport/tstunnel/QUICKSTART.md`**
-   - 快速开始指南
-   - 证书生成示例
-   - 代码示例
-   - 故障排查
+实现 Mutagen 的 `agent.Transport` 接口，提供底层传输能力。
 
-## 实现的接口
-
-### 1. agent.Transport 接口
-
+**transport.go:**
 ```go
-type Transport interface {
-    Copy(localPath, remoteName string) error
-    Command(command string) (*exec.Cmd, error)
-    ClassifyError(processState *os.ProcessState, errorOutput string) (bool, bool, error)
+type tstunnelTransport struct {
+    serverAddr string
+    certFile   string
+    keyFile    string
+    caFile     string
+    insecure   bool
+    tlsConfig  *tls.Config
+    prompter   string
 }
 ```
 
-**关键特性：**
-- ✅ 通过 HTTP UPGRADE 建立 mTLS TCP 连接
-- ✅ 文件上传通过专用端点
-- ✅ 错误分类支持
-- ⚠️ `Command()` 返回占位符进程（需要进一步适配）
+**核心方法：**
+- `Copy(localPath, remoteName string)` - 文件上传到远程
+  - 使用 `/tinyscale/v1/host/copy?path=` 端点
+  - 支持 HTTP POST with streaming body
+  
+- `Command(command string)` - 执行远程命令
+  - 调用 tsctl 的 `host-exec` 子命令
+  - 通过 `/tinyscale/v1/host/command` 端点
+  - 使用 HTTP UPGRADE 建立 TCP 流
+  
+- `ClassifyError()` - 错误分类
+  - 识别连接错误、agent 未找到等情况
 
-### 2. Protocol Handlers
+**tls.go:**
 
-- ✅ `forwarding.ProtocolHandler` - 端口转发
-- ✅ `synchronization.ProtocolHandler` - 文件同步
+TLS 配置构建器，简化证书加载：
 
-## TCP 无法直接提供的能力及解决方案
-
-### 1. ❌ 进程 stdin/stdout 附加
-
-**解决方案：** 服务器端维护持久化 agent 进程池，将 TCP 流路由到进程的 stdio
-
-### 2. ❌ 动态命令执行
-
-**解决方案：** 使用基于消息的协议层，服务器端动态分配 agent 进程
-
-### 3. ✅ 文件传输
-
-**解决方案：** 通过专用 HTTP 端点实现（已实现）
-
-### 4. ✅ 服务器身份验证
-
-**解决方案：** 使用 mTLS 双向认证（已实现）
-
-### 5. ✅ 端口转发
-
-**解决方案：** Mutagen 的转发机制是应用层实现，不依赖 SSH
-
-### 6. ✅ 认证和授权
-
-**解决方案：** 使用 mTLS 证书进行认证
-
-### 7. ⚠️ 会话管理和多路复用
-
-**解决方案：** 当前每个操作建立新连接；未来可使用 HTTP/2 或连接池
-
-## 核心工作流程
-
-```
-1. 客户端创建 TLS 连接（携带客户端证书）
-   ↓
-2. 发送 HTTP UPGRADE 请求到服务器
-   ↓
-3. 服务器验证客户端证书和 SNI
-   ↓
-4. 服务器返回 101 Switching Protocols
-   ↓
-5. 连接升级为原始 TCP 流
-   ↓
-6. 用于 mutagen agent 通信
+```go
+tlsConfig := NewTLSConfigBuilder().
+    WithClientCertificate(certFile, keyFile).
+    WithCACertificate(caFile).
+    WithServerName(serverName).
+    Build()
 ```
 
-## URL 参数格式
+### 3. Forwarding Protocol (`forwarding-protocol/`)
 
-### Forwarding
-```
-tstunnel://host-id/tcp:address?endpoint=...&cert=...&key=...&ca=...
-```
+实现 Mutagen 的 `forwarding.ProtocolHandler` 接口，处理端口转发。
 
-### Synchronization
-```
-tstunnel://host-id/path?endpoint=...&cert=...&key=...&ca=...
-```
+**工作流程：**
+1. 解析目标地址（如 `tcp:localhost:8080`）
+2. 创建 tstunnel transport
+3. 通过 Mutagen agent 建立连接
+4. 创建 remote endpoint 进行转发
 
-### 参数说明
-
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `host-id` | ✅ | 远程主机标识符（用于 SNI） |
-| `endpoint` | ✅ | HTTPS 端点地址 |
-| `cert` | ✅ | 客户端证书路径 |
-| `key` | ✅ | 客户端私钥路径 |
-| `ca` | ⚪ | CA 证书路径 |
-| `upgrade_base` | ⚪ | 升级基础路径（默认 `/tinyscale/v1`） |
-
-## 服务器端要求
-
-服务器需要实现以下端点：
-
-### 1. `/tinyscale/v1/stream`
-- 通用流连接
-- 用于 agent 通信
-
-### 2. `/tinyscale/v1/command`
-- 命令执行连接
-- 连接到 agent 的 forwarder 或 synchronizer
-
-### 3. `/tinyscale/v1/copy/{filename}`
-- 文件上传
-- 写入到用户 home 目录
-
-### 服务器端核心功能
-
-1. ✅ HTTPS 端点和 SNI 路由
-2. ✅ mTLS 配置和客户端证书验证
-3. ✅ HTTP UPGRADE 处理
-4. ⚠️ Agent 进程管理（需要实现）
-5. ⚠️ TCP 流到 agent stdio 的代理（需要实现）
-
-## 集成到 Mutagen 的步骤
-
-要完整集成，还需要：
-
-### 1. ✅ 创建代码实现（已完成）
-- Transport 层
-- Protocol handlers
-- TLS 配置工具
-
-### 2. ⚠️ 更新 Protobuf 定义（待完成）
-
-编辑 `pkg/url/url.proto`：
-
-```protobuf
-enum Protocol {
-    Local = 0;
-    SSH = 1;
-    Docker = 11;
-    Tstunnel = 12;  // 添加这一行
+**注册：**
+```go
+func init() {
+    forwarding.ProtocolHandlers[ts_tunnel.Protocol_Tstunnel] = &ProtocolHandler{}
 }
 ```
 
-运行：
-```bash
-cd pkg/url
-protoc --go_out=. --go_opt=paths=source_relative url.proto
-```
+### 4. Synchronization Protocol (`synchronization-protocol/`)
 
-### 3. ⚠️ 更新 URL 解析（待完成）
+实现 Mutagen 的 `synchronization.ProtocolHandler` 接口，处理文件同步。
 
-在 `pkg/url/url.go` 中添加：
+**工作流程：**
+1. 解析同步路径
+2. 创建 tstunnel transport
+3. 通过 Mutagen agent 建立连接
+4. 创建 remote endpoint 进行同步
 
+**注册：**
 ```go
-case Protocol_Tstunnel:
-    result = "tstunnel"
+func init() {
+    synchronization.ProtocolHandlers[ts_tunnel.Protocol_Tstunnel] = &ProtocolHandler{}
+}
 ```
 
-### 4. ⚠️ 注册 Protocol Handlers（待完成）
+## 与 Guest Agent 的交互
 
-取消注释 init() 函数：
-- `pkg/forwarding/protocols/tstunnel/protocol.go`
-- `pkg/synchronization/protocols/tstunnel/protocol.go`
+TS-Tunnel 依赖远程主机上的 guest agent 提供以下端点：
 
-### 5. ⚠️ 创建 URL 解析器（待完成）
+### 1. `/tinyscale/v1/host/command`
+- **方法**: POST
+- **用途**: 命令执行
+- **流程**:
+  1. 客户端发送 HTTP UPGRADE 请求（带命令 JSON）
+  2. Guest 返回 `101 Switching Protocols`
+  3. 连接升级为 TCP 流
+  4. 双向代理 stdin/stdout
 
-创建 `pkg/url/parse_tstunnel.go`
+### 2. `/tinyscale/v1/host/copy`
+- **方法**: POST
+- **用途**: 文件上传
+- **参数**: `?path=/remote/file/path`
+- **流程**:
+  1. 客户端发送文件内容（可选 gzip 压缩）
+  2. Guest 接收并写入指定路径
+  3. 返回 200 OK
 
-### 6. ⚠️ 修复 Command 实现（待完成）
-
-当前 `Command()` 方法返回占位符，需要：
-- 修改 `pkg/agent/dial.go` 支持非进程 transport
-- 或实现自定义 `io.ReadWriteCloser` 包装 TCP 连接
-
-## 已知限制
-
-### 当前实现
-
-1. ⚠️ **Command 方法**：返回占位符 `exec.Cmd`，需要进一步适配
-2. ⚠️ **连接效率**：每个操作建立新连接，无连接复用
-3. ⚠️ **错误处理**：需要更详细的错误分类
-
-### 需要服务器端实现
-
-1. ❌ Agent 进程池管理
-2. ❌ TCP 流到 agent stdio 的双向代理
-3. ❌ 连接路由逻辑
-4. ❌ 会话和认证管理
+在运行远程主机上的 `guest` agent 时，要把工作目录设置为相对 `.mutagen` 的上级目录。比如 `/home/alpine`。否则将出现在执行时，找不到 mutagen agent 可执行文件的问题。
 
 ## 使用示例
 
-### 基础使用
+### 在 tsctl 中使用
+
+```bash
+# 启动代理
+tsctl start \
+  --listen 127.0.0.1:2375 \
+  --ts-server containers.tinyscale.net:443 \
+  --ts-cert /path/to/client.crt \
+  --ts-key /path/to/client.key \
+  --ts-ca /path/to/ca.crt \
+  --remote-docker unix:///var/run/docker.sock
+```
+
+### URL 格式示例
+
+**端口转发：**
+```
+tstunnel://containers.tinyscale.net:443/tcp:localhost:8080?cert=/path/to/client.crt&key=/path/to/client.key
+```
+
+**文件同步：**
+```
+tstunnel://containers.tinyscale.net:443/app/data?cert=/path/to/client.crt&key=/path/to/client.key&ca=/path/to/ca.crt
+```
+
+### 编程使用
 
 ```go
-// 创建 TLS 配置
-tlsConfig, _ := tstunnel.LoadTLSConfigFromFiles(
-    "client.crt", "client.key", "ca.crt",
-    "host123.containers.tinyscale.net",
-)
-
 // 创建 transport
-transport, _ := tstunnel.NewTransport(tstunnel.TransportOptions{
-    Endpoint:        "containers.tinyscale.net:443",
-    HostID:          "host123",
-    TLSConfig:       tlsConfig,
-    UpgradeBasePath: "/tinyscale/v1",
+transport, err := tstunneltransport.NewTransport(tstunneltransport.TransportOptions{
+    ServerAddr: "containers.tinyscale.net:443",
+    CertFile:   "/path/to/client.crt",
+    KeyFile:    "/path/to/client.key",
+    CAFile:     "/path/to/ca.crt",
+    Insecure:   false,
+    Prompter:   prompter,
 })
 
-// 连接到 agent
-stream, _ := agent.Dial(logger, transport, agent.CommandForwarder, "")
+// 通过 Mutagen agent 拨号
+stream, err := agent.Dial(logger, transport, agent.CommandForwarder, prompter)
 defer stream.Close()
 ```
-
-### URL 格式使用
-
-```go
-url := &urlpkg.URL{
-    Kind:     urlpkg.Kind_Forwarding,
-    Protocol: urlpkg.Protocol_Tstunnel,  // 需要添加到 protobuf
-    Host:     "host123",
-    Path:     "tcp:localhost:8080",
-    Parameters: map[string]string{
-        "endpoint": "containers.tinyscale.net:443",
-        "cert":     "/path/to/client.crt",
-        "key":      "/path/to/client.key",
-        "ca":       "/path/to/ca.crt",
-    },
-}
-```
-
-## 优势
-
-相比 SSH 的优势：
-
-1. ✅ **更好的安全隔离**：用户无法直接 SSH 登录
-2. ✅ **基于证书的认证**：更好的自动化和安全性
-3. ✅ **SNI 路由**：支持多主机场景，便于负载均衡
-4. ✅ **可扩展架构**：服务器端可添加额外逻辑层（流量控制、负载均衡等）
-5. ✅ **更简单的配置**：不需要管理 SSH 密钥和 authorized_keys
-
-## 下一步行动
-
-### 必需的改进（按优先级）
-
-1. **高优先级**
-   - [ ] 修复 `Command()` 实现
-   - [ ] 添加 `Protocol_Tstunnel` 到 protobuf
-   - [ ] 实现服务器端组件原型
-
-2. **中优先级**
-   - [ ] 创建 URL 解析器
-   - [ ] 添加单元测试
-   - [ ] 实现连接池
 
 3. **低优先级**
    - [ ] 添加 HTTP/2 支持
@@ -318,7 +216,3 @@ url := &urlpkg.URL{
 - ✅ TLS 配置工具
 - ✅ 详细的文档和使用指南
 
-主要挑战：
-- ⚠️ 需要修改 mutagen 核心代码以支持非进程 transport
-- ⚠️ 需要实现服务器端 agent 管理组件
-- ⚠️ 需要完成 protobuf 和 URL 解析集成

@@ -1,20 +1,78 @@
-# Tstunnel Quick Start Guide
+# TS-Tunnel 快速开始指南
 
 ## 简介
 
-Tstunnel 是一个基于 mTLS 的 TCP 隧道传输协议，用于替代 SSH 在 Mutagen 中的底层通信机制。
+TS-Tunnel 是 tsctl 项目中基于 mTLS 的自定义传输协议，提供安全、灵活的远程 Docker 访问能力。
+
+## 前置要求
+
+1. **远程主机**：已安装并运行 `guest` agent
+2. **TLS 证书**：客户端证书和密钥（可选，用于 mTLS）
+3. **网络连通性**：客户端可访问服务器的 443 端口（或自定义端口）
 
 ## 快速开始
 
-### 1. 准备 TLS 证书
+### 1. 准备 TLS 证书（可选）
 
-首先需要准备以下证书文件：
+对于开发环境，可以跳过 TLS 验证（使用 `--ts-insecure` 标志）。生产环境建议使用证书。
 
-- `client.crt`: 客户端证书
-- `client.key`: 客户端私钥
-- `ca.crt`: CA 证书（用于验证服务器）
+### 2. 启动 Guest Agent
 
-#### 生成示例证书（仅用于测试）
+在远程主机上启动 guest agent：
+
+```bash
+# 默认端口 8080
+guest
+
+# 或指定端口
+guest --port 9090
+```
+
+Guest agent 会监听 HTTP 请求，提供命令执行和文件拷贝端点。
+
+### 3. 启动 tsctl 代理
+
+#### 方式 A：使用 mTLS（推荐）
+
+```bash
+tsctl start \
+  --listen 127.0.0.1:2375 \
+  --ts-server containers.tinyscale.net:443 \
+  --ts-cert /path/to/client.crt \
+  --ts-key /path/to/client.key \
+  --ts-ca /path/to/ca.crt \
+  --remote-docker unix:///var/run/docker.sock
+```
+
+#### 方式 B：跳过 TLS 验证（仅开发）
+
+```bash
+tsctl start \
+  --listen 127.0.0.1:2375 \
+  --ts-server remote-host:8080 \
+  --ts-insecure \
+  --remote-docker unix:///var/run/docker.sock
+```
+
+### 4. 使用 Docker CLI
+
+```bash
+# 配置 Docker CLI
+export DOCKER_HOST=tcp://127.0.0.1:2375
+
+# 测试连接
+docker info
+
+# 运行容器（自动端口转发和文件同步）
+docker run -d -p 8080:80 -v $(pwd):/app nginx
+
+# 查看容器
+docker ps
+```
+
+## 生成测试证书
+
+仅用于开发和测试环境：
 
 ```bash
 # 生成 CA
@@ -40,358 +98,182 @@ openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key \
   -CAcreateserial -out client.crt -days 365
 ```
 
-### 2. 使用 TLS 配置构建器
-
-```go
-package main
-
-import (
-    "log"
-    "github.com/mutagen-io/mutagen/pkg/agent/transport/tstunnel"
-)
-
-func main() {
-    // 方式 1: 使用构建器
-    tlsConfig, err := tstunnel.NewTLSConfigBuilder().
-        WithClientCertificate("client.crt", "client.key").
-        WithCACertificate("ca.crt").
-        WithServerName("abcdefg.containers.tinyscale.net").
-        Build()
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 方式 2: 使用便捷函数
-    tlsConfig, err = tstunnel.LoadTLSConfigFromFiles(
-        "client.crt",
-        "client.key",
-        "ca.crt",
-        "abcdefg.containers.tinyscale.net",
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-}
+  -CAcreateserial -out client.crt -days 365
 ```
 
-### 3. 创建 Tstunnel Transport
+## URL 格式详解
 
-```go
-package main
+### 端口转发 URL
 
-import (
-    "log"
-    "github.com/mutagen-io/mutagen/pkg/agent/transport/tstunnel"
-)
-
-func main() {
-    tlsConfig, _ := tstunnel.LoadTLSConfigFromFiles(
-        "client.crt", "client.key", "ca.crt",
-        "abcdefg.containers.tinyscale.net",
-    )
-    
-    transport, err := tstunnel.NewTransport(tstunnel.TransportOptions{
-        Endpoint:        "containers.tinyscale.net:443",
-        HostID:          "abcdefg",
-        TLSConfig:       tlsConfig,
-        UpgradeBasePath: "/tinyscale/v1",
-        Prompter:        "",
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 使用 transport...
-}
+格式：
 ```
-
-### 4. 在 remote-docker-agent 中使用
-
-#### 配置示例
-
-```yaml
-# config.yaml
-endpoint: "containers.tinyscale.net:443"
-host_id: "my-container-host"
-tls:
-  cert: "/path/to/client.crt"
-  key: "/path/to/client.key"
-  ca: "/path/to/ca.crt"
-upgrade_base_path: "/tinyscale/v1"
-```
-
-#### 代码示例
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-    
-    "github.com/mutagen-io/mutagen/pkg/agent"
-    "github.com/mutagen-io/mutagen/pkg/agent/transport/tstunnel"
-    "github.com/mutagen-io/mutagen/pkg/forwarding"
-    "github.com/mutagen-io/mutagen/pkg/logging"
-)
-
-func main() {
-    // 加载配置
-    cfg := loadConfig("config.yaml")
-    
-    // 创建 logger
-    logger := logging.NewLogger(logging.LevelInfo, "")
-    
-    // 创建 TLS 配置
-    tlsConfig, err := tstunnel.LoadTLSConfigFromFiles(
-        cfg.TLS.Cert,
-        cfg.TLS.Key,
-        cfg.TLS.CA,
-        fmt.Sprintf("%s.%s", cfg.HostID, strings.Split(cfg.Endpoint, ":")[0]),
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 创建 transport
-    transport, err := tstunnel.NewTransport(tstunnel.TransportOptions{
-        Endpoint:        cfg.Endpoint,
-        HostID:          cfg.HostID,
-        TLSConfig:       tlsConfig,
-        UpgradeBasePath: cfg.UpgradeBasePath,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 连接到远程 agent
-    stream, err := agent.Dial(logger, transport, agent.CommandForwarder, "")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer stream.Close()
-    
-    // 使用 stream 进行通信...
-}
-```
-
-### 5. 端口转发示例
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-    
-    "github.com/mutagen-io/mutagen/pkg/forwarding"
-    "github.com/mutagen-io/mutagen/pkg/logging"
-    urlpkg "github.com/mutagen-io/mutagen/pkg/url"
-)
-
-func main() {
-    logger := logging.NewLogger(logging.LevelInfo, "")
-    ctx := context.Background()
-    
-    // 创建转发 URL
-    // 注意: 这需要在 url.proto 中添加 Protocol_Tstunnel 后才能使用
-    url := &urlpkg.URL{
-        Kind:     urlpkg.Kind_Forwarding,
-        Protocol: urlpkg.Protocol_Tstunnel,
-        Host:     "my-container-host",
-        Path:     "tcp:localhost:8080",  // 远程目标
-        Parameters: map[string]string{
-            "endpoint":     "containers.tinyscale.net:443",
-            "cert":         "/path/to/client.crt",
-            "key":          "/path/to/client.key",
-            "ca":           "/path/to/ca.crt",
-            "upgrade_base": "/tinyscale/v1",
-        },
-    }
-    
-    // 创建本地监听端点
-    localEndpoint, err := forwarding.NewListenerEndpoint(
-        logger,
-        forwarding.Version_Version1,
-        &forwarding.Configuration{},
-        "tcp",
-        "localhost:3000",  // 本地监听地址
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 连接到远程端点
-    remoteEndpoint, err := forwarding.Connect(
-        ctx,
-        logger,
-        url,
-        "",  // prompter
-        "",  // session
-        forwarding.Version_Version1,
-        &forwarding.Configuration{},
-        false,
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 创建转发会话
-    // (这里需要使用 forwarding.Manager 或直接使用底层 API)
-    
-    log.Println("Port forwarding established: localhost:3000 -> remote:8080")
-}
-```
-
-### 6. 文件同步示例
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-    
-    "github.com/mutagen-io/mutagen/pkg/logging"
-    "github.com/mutagen-io/mutagen/pkg/synchronization"
-    urlpkg "github.com/mutagen-io/mutagen/pkg/url"
-)
-
-func main() {
-    logger := logging.NewLogger(logging.LevelInfo, "")
-    ctx := context.Background()
-    
-    // 创建同步 URL
-    url := &urlpkg.URL{
-        Kind:     urlpkg.Kind_Synchronization,
-        Protocol: urlpkg.Protocol_Tstunnel,
-        Host:     "my-container-host",
-        Path:     "/app/data",  // 远程路径
-        Parameters: map[string]string{
-            "endpoint": "containers.tinyscale.net:443",
-            "cert":     "/path/to/client.crt",
-            "key":      "/path/to/client.key",
-            "ca":       "/path/to/ca.crt",
-        },
-    }
-    
-    // 连接到远程端点
-    endpoint, err := synchronization.Connect(
-        ctx,
-        logger,
-        url,
-        "",  // prompter
-        "",  // session
-        synchronization.Version_Version1,
-        &synchronization.Configuration{},
-        false,
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer endpoint.Shutdown()
-    
-    // 使用 synchronization.Manager 进行同步...
-    
-    log.Println("Synchronization endpoint connected")
-}
-```
-
-## URL 格式
-
-### Forwarding URL
-
-```
-tstunnel://host-id/protocol:address?endpoint=...&cert=...&key=...
+tstunnel://server-host:port/tcp:target-address?cert=...&key=...&ca=...
 ```
 
 示例：
-
+```bash
+# 转发本地 8080 到远程 localhost:8080
+tstunnel://containers.tinyscale.net:443/tcp:localhost:8080?cert=/certs/client.crt&key=/certs/client.key&ca=/certs/ca.crt
 ```
-tstunnel://my-host/tcp:localhost:8080?endpoint=containers.tinyscale.net:443&cert=/certs/client.crt&key=/certs/client.key&ca=/certs/ca.crt
-```
 
-### Synchronization URL
+### 文件同步 URL
 
+格式：
 ```
-tstunnel://host-id/path?endpoint=...&cert=...&key=...
+tstunnel://server-host:port/remote/path?cert=...&key=...
 ```
 
 示例：
-
+```bash
+# 同步到远程 /app 目录
+tstunnel://containers.tinyscale.net:443/app?cert=/certs/client.crt&key=/certs/client.key
 ```
-tstunnel://my-host/app/data?endpoint=containers.tinyscale.net:443&cert=/certs/client.crt&key=/certs/client.key
-```
 
-## 环境变量
+### URL 参数说明
 
-可以通过环境变量设置默认值：
+| 参数 | 必需 | 说明 | 示例 |
+|------|------|------|------|
+| `server-host:port` | ✅ | 服务器地址 | `containers.tinyscale.net:443` |
+| `cert` | ⚪ | 客户端证书路径 | `/path/to/client.crt` |
+| `key` | ⚪ | 客户端私钥路径 | `/path/to/client.key` |
+| `ca` | ⚪ | CA 证书路径 | `/path/to/ca.crt` |
+| `insecure` | ⚪ | 跳过 TLS 验证 | `insecure=true` |
+
+**注意**：
+- `cert` 和 `key` 必须同时提供或同时省略
+- 如果省略证书，端口默认为 80；否则默认为 443
+- `insecure=true` 仅用于开发，生产环境不推荐
+
+## 使用场景
+
+### 场景 1：本地开发，远程 Docker
 
 ```bash
-export TSTUNNEL_ENDPOINT="containers.tinyscale.net:443"
-export TSTUNNEL_CERT="/path/to/client.crt"
-export TSTUNNEL_KEY="/path/to/client.key"
-export TSTUNNEL_CA="/path/to/ca.crt"
-export TSTUNNEL_UPGRADE_BASE="/tinyscale/v1"
+# 启动代理
+tsctl start --listen :2375 --ts-server dev-host:8080 --ts-insecure
+
+# 设置环境变量
+export DOCKER_HOST=tcp://localhost:2375
+
+# 像使用本地 Docker 一样工作
+docker build -t myapp .
+docker run -p 3000:3000 -v $(pwd):/workspace myapp
 ```
 
-## 故障排查
+### 场景 2：多环境管理
 
-### 连接失败
+```bash
+# 开发环境
+alias docker-dev='DOCKER_HOST=tcp://localhost:2375 docker'
+
+# 生产环境
+alias docker-prod='DOCKER_HOST=tcp://localhost:2376 docker'
+
+# 使用
+docker-dev ps
+docker-prod ps
+```
+
+### 场景 3：远程命令执行
+
+```bash
+# 执行单条命令
+tsctl host-exec --server-addr remote:8080 --insecure -- ls -la
+
+# 执行脚本
+tsctl host-exec --server-addr remote:8080 --insecure -- bash -c "cd /app && ./deploy.sh"
+
+# 带环境变量
+tsctl host-exec \
+  --server-addr remote:8080 \
+  --insecure \
+  -e "ENV=production" \
+  -e "DEBUG=false" \
+  -- printenv
+```
+
+## 常见问题
+
+## 常见问题
+
+### Q1: 连接失败 - 证书错误
 
 ```
 Error: failed to establish TLS connection: x509: certificate signed by unknown authority
 ```
 
-**解决方案**：确保 CA 证书正确，或使用 `WithInsecureSkipVerify()` (仅用于测试)
+**解决方案**：
+- 确保使用正确的 CA 证书（`--ts-ca`）
+- 或在开发环境使用 `--ts-insecure`
 
-### 升级失败
+### Q2: Guest agent 无响应
 
 ```
-Error: server did not accept upgrade: 400 Bad Request
+Error: connection refused
 ```
 
 **解决方案**：
-1. 检查服务器是否支持 HTTP UPGRADE
-2. 确认 `upgrade_base` 路径正确
-3. 查看服务器日志
+1. 检查 guest agent 是否运行：`ps aux | grep guest`
+2. 检查端口是否正确
+3. 检查防火墙规则
 
-### Agent 连接失败
+### Q3: 端口转发不生效
+
+**检查步骤**：
+1. 查看 tsctl 日志，确认转发会话已创建
+2. 使用 `docker ps` 确认容器正在运行
+3. 测试本地端口：`curl localhost:8080`
+
+### Q4: 文件同步不工作
+
+**检查步骤**：
+1. 确认本地路径存在：`ls -la /local/path`
+2. 查看 tsctl 日志中的同步会话状态
+3. 检查远程主机上的文件：使用 `host-exec` 执行 `ls`
+
+### Q5: 证书验证失败
 
 ```
-Error: unable to dial agent endpoint: connection timeout
+Error: x509: certificate is valid for containers.tinyscale.net, not abc.containers.tinyscale.net
 ```
 
 **解决方案**：
-1. 确认服务器端 agent 已启动
-2. 检查防火墙规则
-3. 验证 hostID 正确
+- 确保服务器证书包含正确的 SAN（Subject Alternative Name）
+- 使用通配符证书：`*.containers.tinyscale.net`
+- 或使用 `--ts-insecure` 跳过验证（仅开发）
 
-### 证书验证失败
+## 性能优化
 
+### 1. 减少连接开销
+
+当前每个操作建立新连接，未来版本将支持连接池。
+
+### 2. 调整超时设置
+
+在代码中可配置超时参数（未来将暴露为 CLI 参数）。
+
+### 3. 使用本地证书
+
+将 CA 证书添加到系统信任存储，减少验证开销：
+
+```bash
+# macOS
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ca.crt
+
+# Linux
+sudo cp ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates
 ```
-Error: x509: certificate is valid for containers.tinyscale.net, not abcdefg.containers.tinyscale.net
-```
-
-**解决方案**：确保服务器证书包含正确的 SAN (Subject Alternative Name)，例如 `*.containers.tinyscale.net`
-
-## 性能优化建议
-
-1. **重用连接**：在应用层实现连接池
-2. **调整超时**：根据网络延迟调整 `upgradeTimeout` 和 `commandTimeout`
-3. **使用本地 CA**：将 CA 证书添加到系统信任存储，减少验证开销
-4. **监控指标**：记录连接建立时间、传输速度等指标
 
 ## 安全最佳实践
 
 1. ✅ **使用强密钥**：至少 2048 位 RSA 或 256 位 ECDSA
-2. ✅ **定期轮换证书**：建议每 90 天轮换一次
-3. ✅ **保护私钥**：使用适当的文件权限 (chmod 600)
-4. ✅ **启用证书撤销检查**：在生产环境中配置 CRL 或 OCSP
-5. ✅ **审计日志**：记录所有连接和操作
+2. ✅ **定期轮换证书**：建议每 90 天轮换
+3. ✅ **保护私钥**：
+   ```bash
+   chmod 600 client.key
+   chmod 600 server.key
+   ```
+4. ✅ **限制证书权限**：使用证书扩展限制用途
+5. ✅ **监控和审计**：记录所有连接和操作
 
-## 更多资源
-
-- [完整实现文档](IMPLEMENTATION.md)
-- [服务器端实现指南](./SERVER.md) (待创建)
-- [TLS 证书管理](./TLS_MANAGEMENT.md) (待创建)
