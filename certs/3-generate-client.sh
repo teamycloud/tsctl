@@ -13,7 +13,7 @@ openssl genrsa -out ${USER_ID}.key 2048
 
 # Create client CSR
 openssl req -new -key ${USER_ID}.key -out ${USER_ID}.csr \
-  -subj "/C=US/ST=State/L=City/O=TinyScale/CN=user@tinyscale.com"
+  -subj "/C=US/ST=State/L=City/O=tinyscale/CN=${USER_ID}"
 
 # Create client certificate config with SPIFFE URI
 cat > ${USER_ID}.ext << EOF
