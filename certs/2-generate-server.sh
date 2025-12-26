@@ -1,6 +1,10 @@
 #!/bin/sh
 
 SERVER_NAME=$1
+if [ -z "$SERVER_NAME" ]; then
+  echo "Usage: $0 <server-name>"
+  exit 1
+fi
 
 # Generate server private key
 openssl genrsa -out server.key 2048

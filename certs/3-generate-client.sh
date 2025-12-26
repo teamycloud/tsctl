@@ -9,19 +9,19 @@ if [ -z "$USER_ID" ] || [ -z "$ORG_ID" ]; then
 fi
 
 # Generate client private key
-openssl genrsa -out client.key 2048
+openssl genrsa -out ${USER_ID}.key 2048
 
 # Create client CSR
-openssl req -new -key client.key -out client.csr \
+openssl req -new -key ${USER_ID}.key -out ${USER_ID}.csr \
   -subj "/C=US/ST=State/L=City/O=TinyScale/CN=user@tinyscale.com"
 
 # Create client certificate config with SPIFFE URI
-cat > client.ext << EOF
+cat > ${USER_ID}.ext << EOF
 subjectAltName = URI:spiffe://tinyscale.com/orgs/${ORG_ID}/users/${USER_ID}
 extendedKeyUsage = clientAuth
 EOF
 
 # Sign client certificate
-openssl x509 -req -days 365 -in client.csr \
+openssl x509 -req -days 365 -in ${USER_ID}.csr \
   -CA ca.pem -CAkey ca.key -CAcreateserial \
-  -out client.crt -extfile client.ext
+  -out ${USER_ID}.crt -extfile ${USER_ID}.ext
