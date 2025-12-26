@@ -1,0 +1,19 @@
+
+// all docker daemon configration:
+// https://docs.docker.com/reference/cli/dockerd/#on-linux
+
+
+{
+        "hosts" : [
+                "unix:///var/run/docker.sock",
+                "tcp://0.0.0.0:2375"
+        ],
+        
+        "tls": true,
+        "tlscert": "/home/alpine/.mutagen/agents/server.crt",
+        "tlskey": "/home/alpine/.mutagen/agents/server.key",
+
+        "tlsverify": true,
+        "tlscacert": "/home/alpine/.mutagen/agents/ca.pem"
+}
+
