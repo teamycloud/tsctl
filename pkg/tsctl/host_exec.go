@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
+	"github.com/teamycloud/tsctl/pkg/utils"
 	"github.com/teamycloud/tsctl/pkg/utils/tlsconfig"
 )
 
@@ -50,18 +51,23 @@ Example:
 				return fmt.Errorf("no command specified. Usage: tsctl host-exec [flags] -- COMMAND [args...]")
 			}
 
+			var tlsClientConfig *tls.Config
+			var err error
+
 			command := args[0]
 			cmdArgs := args[1:]
 
-			cfgBuilder := tlsconfig.NewTLSConfigBuilder().
-				WithServerName(ts_tunnel.URLHostName(serverAddr)).
-				WithClientCertificate(clientCertFile, clientKeyFile).
-				WithCACertificate(caCertFile).
-				WithInsecureSkipVerify(insecure)
+			if clientCertFile != "" && clientKeyFile != "" {
+				cfgBuilder := tlsconfig.NewTLSConfigBuilder().
+					WithServerName(ts_tunnel.URLHostName(serverAddr)).
+					WithClientCertificate(clientCertFile, clientKeyFile).
+					WithCACertificate(caCertFile).
+					WithInsecureSkipVerify(insecure)
 
-			tlsClientConfig, err := cfgBuilder.Build()
-			if err != nil {
-				return fmt.Errorf("unable to build TLS configuration: %w", err)
+				tlsClientConfig, err = cfgBuilder.Build()
+				if err != nil {
+					return fmt.Errorf("unable to build TLS configuration: %w", err)
+				}
 			}
 
 			return executeCommand(serverAddr, command, cmdArgs, envs, tlsClientConfig)
@@ -159,24 +165,7 @@ func executeCommand(serverAddr, command string, args []string, envs []string, tl
 		os.Exit(-1)
 	}
 
-	// Connection is now upgraded to TCP
-	// Copy stdin to connection and connection to Stderr
-	errCh := make(chan error, 2)
-
-	// Copy stdin to connection
-	go func() {
-		_, err := io.Copy(netConn, os.Stdin)
-		errCh <- err
-	}()
-
-	// Copy connection to Stderr
-	go func() {
-		_, err := io.Copy(os.Stdout, netConn)
-		errCh <- err
-	}()
-
-	// Wait for either goroutine to finish
-	<-errCh
+	_ = utils.CopyWithSplitMerge(netConn, os.Stdin, os.Stdout)
 
 	return nil
 }

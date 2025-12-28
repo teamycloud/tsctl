@@ -7,23 +7,24 @@ import (
 	"io"
 	"net"
 	"strings"
-)
 
+	"github.com/teamycloud/tsctl/pkg/utils"
+)
 
 // HTTPRouter handles HTTP request inspection and routing
 type HTTPRouter struct {
-	backendHost string
-	clientCert  *tls.Certificate
-	dockerPort  int
+	backendHost  string
+	clientCert   *tls.Certificate
+	dockerPort   int
 	hostExecPort int
 }
 
 // NewHTTPRouterWithClientCert creates a new HTTP router with client certificate
 func NewHTTPRouterWithClientCert(backendHost string, clientCert *tls.Certificate, dockerPort, hostExecPort int) *HTTPRouter {
 	return &HTTPRouter{
-		backendHost: backendHost,
-		clientCert:  clientCert,
-		dockerPort:  dockerPort,
+		backendHost:  backendHost,
+		clientCert:   clientCert,
+		dockerPort:   dockerPort,
 		hostExecPort: hostExecPort,
 	}
 }
@@ -87,32 +88,7 @@ func (r *HTTPRouter) RouteAndProxy(clientConn net.Conn) error {
 		}
 	}
 
-	// Bidirectional copy for the rest of the connection
-	errChan := make(chan error, 2)
-
-	// Client -> Backend (remaining data)
-	go func() {
-		_, err := io.Copy(backendConn, clientConn)
-		errChan <- err
-	}()
-
-	// Backend -> Client
-	go func() {
-		_, err := io.Copy(clientConn, backendConn)
-		errChan <- err
-	}()
-
-	// Wait for either direction to complete
-	err = <-errChan
-
-	// Close both connections to terminate the other goroutine
-	clientConn.Close()
-	backendConn.Close()
-
-	// Wait for the second goroutine
-	<-errChan
-
-	return err
+	return utils.CopyBiDirectional(clientConn, backendConn)
 }
 
 // determinePort determines the backend port based on the request path

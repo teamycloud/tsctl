@@ -3,7 +3,6 @@ package guest
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -11,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mutagen-io/mutagen/pkg/stream"
+	"github.com/teamycloud/tsctl/pkg/utils"
 )
 
 type CommandRequest struct {
@@ -98,14 +97,14 @@ func runCommand(cmdReq *CommandRequest, w http.ResponseWriter) {
 	}
 
 	// Get stdin pipe
-	stdin, err := cmd.StdinPipe()
+	cmdStdin, err := cmd.StdinPipe()
 	if err != nil {
 		log.Printf("Failed to create stdin pipe: %v", err)
 		return
 	}
 
 	// Get stdout pipe
-	stdout, err := cmd.StdoutPipe()
+	cmdStdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("Failed to create stdout pipe: %v", err)
 		return
@@ -122,21 +121,7 @@ func runCommand(cmdReq *CommandRequest, w http.ResponseWriter) {
 	processRegistry.AddProcess(cmd.Process)
 	defer processRegistry.RemoveProcess(cmd.Process)
 
-	// Pipe connection to stdin
-	go func() {
-		_, _ = io.Copy(stdin, conn)
-		_ = stdin.Close()
-	}()
-
-	// Pipe stdout to connection
-	go func() {
-		_, err := io.Copy(conn, stdout)
-		if err == nil {
-			if closableWriter, ok := conn.(stream.CloseWriter); ok {
-				closableWriter.CloseWrite()
-			}
-		}
-	}()
+	_ = utils.CopyWithSplitMerge(conn, cmdStdout, cmdStdin)
 
 	// we don't pipe stderr (just ignore it), because mutagen doesn't care it
 
