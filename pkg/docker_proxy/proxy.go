@@ -936,7 +936,7 @@ func (p *DockerProxy) createRemoteMountDirectories(mounts *ContainerMounts) erro
 
 	}
 
-	if p.cfg.TransportType == TransportTSTunnel && len(remotePaths) == 0 {
+	if p.cfg.TransportType == TransportTSTunnel && len(remotePaths) > 0 {
 		if err := p.createDirsByTsTunnel(remotePaths); err != nil {
 			return err
 		}
