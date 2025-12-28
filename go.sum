@@ -120,8 +120,6 @@ github.com/mutagen-io/fsevents v0.0.0-20230629001834-f53e17b91ebc h1:yOGQ0Hc3NfO
 github.com/mutagen-io/fsevents v0.0.0-20230629001834-f53e17b91ebc/go.mod h1:kmTyqetTEgYl9KF5JlHLKL6LXnhs2/oK5100pcMZRn8=
 github.com/mutagen-io/gopass v0.0.0-20230214181532-d4b7cdfe054c h1:c0xgZ8mF6PwiDc6aW2MEcdaCXxkt5K30kzylWqkT4oc=
 github.com/mutagen-io/gopass v0.0.0-20230214181532-d4b7cdfe054c/go.mod h1:Q87jWQAqEC/UdnYLd+A0mfR9oZl5gk6g/xvxzTpwLv8=
-github.com/mutagen-io/mutagen v0.18.1 h1:uYR9CHuynFNO0zGFMypI2LseX9VkIYlgfWQeI/j4824=
-github.com/mutagen-io/mutagen v0.18.1/go.mod h1:fZl0yHFv6ZjEWvPap2frbiAraNqI8ji/NymSPa37yEQ=
 github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f/go.mod h1:ZdcZmHo+o7JKHSa8/e818NopupXU1YMK5fe1lsApnBw=
 github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e/go.mod h1:zD1mROLANZcx1PVRCS0qkT7pwLkGfwJo4zjcN/Tysno=
 github.com/onsi/ginkgo v0.0.0-20170829012221-11459a886d9c/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
@@ -150,6 +148,8 @@ github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
+github.com/teamycloud/mutagen v0.18.1-tinyscale h1:XRoFCz95T2XNO0UsZFyjctcMiCq1YUEBm+gLeSaYVjQ=
+github.com/teamycloud/mutagen v0.18.1-tinyscale/go.mod h1:fZl0yHFv6ZjEWvPap2frbiAraNqI8ji/NymSPa37yEQ=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=
