@@ -113,7 +113,7 @@ func RunServer(port int) {
 func RunServerWithConfig(config *ServerConfig) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tinyscale/v1/host-exec/command", handleCommand)
-	mux.HandleFunc("/tinyscale/v1/host-exec/copy", handleCopy)
+	mux.HandleFunc("/tinyscale/v1/host-exec/directories", handleCreateDirectories)
 
 	addr := fmt.Sprintf(":%d", config.Port)
 	log.Printf("Starting guest agent on %s", addr)

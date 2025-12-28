@@ -47,14 +47,13 @@ func (h *ProtocolHandler) Connect(
 	// Note: Protocol check would go here once tstunnel is added to Protocol enum
 
 	// Create a tstunnel transport.
-	transport, err := tstunneltransport.NewTransport(tstunneltransport.TransportOptions{
+	transport, err := tstunneltransport.NewTransport(ts_tunnel.ServerOptions{
 		ServerAddr: fmt.Sprintf("%s:%d", url.Host, url.Port),
 		CertFile:   url.Parameters["cert"],
 		KeyFile:    url.Parameters["key"],
 		CAFile:     url.Parameters["ca"],
 		Insecure:   url.Parameters["insecure"] != "",
-		Prompter:   prompter,
-	})
+	}, prompter)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create tstunnel transport: %w", err)
 	}

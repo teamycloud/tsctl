@@ -44,7 +44,7 @@ func handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if existStatus := commandExists(cmdReq.Command); existStatus != http.StatusOK {
-		http.Error(w, fmt.Sprintf("Command not found or not executable"), existStatus)
+		http.Error(w, "Command not found or not executable", existStatus)
 		return
 	}
 
@@ -52,6 +52,9 @@ func handleCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 func runCommand(cmdReq *CommandRequest, w http.ResponseWriter) {
+	// 仅允许运行 mutagen agent
+	// todo: 处理自动安装逻辑（从待运行的路径中，获取版本，并自动从指定的服务器下载安装）
+
 	// Hijack the connection to upgrade to TCP
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
@@ -132,28 +135,78 @@ func runCommand(cmdReq *CommandRequest, w http.ResponseWriter) {
 }
 
 func commandExists(cmd string) int {
-	if _, err := exec.LookPath(cmd); err != nil {
-		// If LookPath fails, try to check if it's an absolute path
-		if filepath.IsAbs(cmd) {
-			info, statErr := os.Stat(cmd)
-			if statErr != nil {
-				return http.StatusNotFound
-			}
-			// Check if it's executable (on Unix-like systems)
-			if info.Mode()&0111 == 0 {
-				return http.StatusForbidden
-			}
-		} else {
-			// relative path to the current working directory
-			relativeInfo, err := os.Stat(cmd)
-			if err != nil {
-				return http.StatusNotFound
-			}
-			if relativeInfo.Mode()&0111 == 0 {
-				return http.StatusForbidden
-			}
+	// First check if the command is allowed (within executable directory tree)
+	allowedPath, allowed := isCommandAllowed(cmd)
+	if !allowed {
+		log.Printf("Command not allowed: %s", cmd)
+		return http.StatusForbidden
+	}
+
+	// Check if the command exists and is executable
+	info, err := os.Stat(allowedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return http.StatusNotFound
 		}
+		return http.StatusForbidden
+	}
+
+	// Check if it's executable (on Unix-like systems)
+	if info.Mode()&0111 == 0 {
+		return http.StatusForbidden
 	}
 
 	return http.StatusOK
+}
+
+// getExecutableDir returns the directory containing the current executable
+func getExecutableDir() (string, error) {
+	execPath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	// Resolve symlinks to get the real path
+	realPath, err := filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(realPath), nil
+}
+
+// isCommandAllowed checks if the command path is within the executable's directory tree
+func isCommandAllowed(cmd string) (string, bool) {
+	execDir, err := getExecutableDir()
+	if err != nil {
+		log.Printf("Failed to get executable directory: %v", err)
+		return "", false
+	}
+
+	var cmdPath string
+	if filepath.IsAbs(cmd) {
+		// Absolute path: resolve and use directly
+		cmdPath = filepath.Clean(cmd)
+	} else {
+		// Relative path: resolve relative to executable directory
+		cmdPath = filepath.Clean(filepath.Join(execDir, cmd))
+	}
+
+	// Resolve symlinks to get the real path
+	realCmdPath, err := filepath.EvalSymlinks(cmdPath)
+	if err != nil {
+		// If symlink resolution fails, use the cleaned path
+		realCmdPath = cmdPath
+	}
+
+	// Check if the real command path is within the executable directory tree
+	relPath, err := filepath.Rel(execDir, realCmdPath)
+	if err != nil {
+		return "", false
+	}
+
+	// If the relative path starts with "..", it's outside the directory tree
+	if strings.HasPrefix(relPath, "..") || strings.HasPrefix(relPath, string(filepath.Separator)+"..") {
+		return "", false
+	}
+
+	return realCmdPath, true
 }

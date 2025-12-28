@@ -116,7 +116,7 @@ func executeCommand(serverAddr, command string, args []string, envs []string, tl
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Upgrade", "tcp")
 	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("User-Agent", "ts")
+	req.Header.Set("User-Agent", "tsctl")
 
 	// Create TLS config if needed
 	var netConn net.Conn

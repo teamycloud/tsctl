@@ -1,158 +1,41 @@
 package agent_transport
 
 import (
-	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/mutagen-io/mutagen/pkg/agent"
 	"github.com/mutagen-io/mutagen/pkg/agent/transport"
 	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
 	"github.com/teamycloud/tsctl/pkg/utils/shelex"
-	"github.com/teamycloud/tsctl/pkg/utils/tlsconfig"
-)
-
-const (
-	// upgradeTimeout is the maximum time to wait for the HTTP UPGRADE to complete.
-	upgradeTimeout = 30 * time.Second
-	// commandTimeout is the maximum time to wait for a command response.
-	commandTimeout = 60 * time.Second
 )
 
 // tstunnelTransport implements the agent.Transport interface using mTLS-enabled TCP connections.
 type tstunnelTransport struct {
-	// serverAddr is the HTTPS serverAddr to connect to (e.g., "containers.tinyscale.net:443").
-	serverAddr string
-	// certFile is the path to the client certificate file.
-	certFile string
-	// keyFile is the path to the client key file.
-	keyFile string
-	// caFile is the path to the CA certificate file (optional).
-	caFile string
-
-	insecure bool
-
-	tlsConfig *tls.Config
+	ts_tunnel.ServerOptions
 	// prompter is the prompter identifier to use for prompting.
 	prompter string
 }
 
-// TransportOptions provides configuration options for creating a tstunnel transport.
-type TransportOptions struct {
-	// ServerAddr is the HTTPS serverAddr to connect to (host:port).
-	ServerAddr string
-	// CertFile is the path to the client certificate file.
-	CertFile string
-	// KeyFile is the path to the client key file.
-	KeyFile string
-	// CAFile is the path to the CA certificate file (optional).
-	CAFile string
-
-	Insecure bool
-
-	// Prompter is the prompter identifier.
-	Prompter string
-}
-
 // NewTransport creates a new tstunnel transport using the specified options.
-func NewTransport(opts TransportOptions) (agent.Transport, error) {
-	var tlsCfg *tls.Config
-	var err error
-
+func NewTransport(opts ts_tunnel.ServerOptions, prompter string) (agent.Transport, error) {
 	if opts.ServerAddr == "" {
 		return nil, errors.New("ServerAddr is required")
 	}
 
-	if ts_tunnel.UseTLS(opts.CertFile, opts.KeyFile, opts.CAFile, opts.Insecure) {
-		tlsCfgBuilder := tlsconfig.NewTLSConfigBuilder().
-			WithServerName(ts_tunnel.URLHostName(opts.ServerAddr)).
-			WithClientCertificate(opts.CertFile, opts.KeyFile).
-			WithCACertificate(opts.CAFile).
-			WithInsecureSkipVerify(opts.Insecure)
-
-		tlsCfg, err = tlsCfgBuilder.Build()
-		if err != nil {
-			return nil, fmt.Errorf("unable to build TLS configuration: %w", err)
-		}
-	}
-
 	return &tstunnelTransport{
-		serverAddr: opts.ServerAddr,
-		certFile:   opts.CertFile,
-		keyFile:    opts.KeyFile,
-		caFile:     opts.CAFile,
-		insecure:   opts.Insecure,
-		tlsConfig:  tlsCfg,
-		prompter:   opts.Prompter,
+		ServerOptions: opts,
+		prompter:      prompter,
 	}, nil
 }
 
 // Copy implements the Copy method of agent.Transport.
+// ts-tunnel 不允许、也不需要向服务端上传文件
+// 在 Mutagen 的默认实现中，Copy 方法用于向远端复制、安装 agnet。在我们的实现中，agent 的安装是由服务端自动完成的。
 func (t *tstunnelTransport) Copy(localPath, remoteName string) error {
-	// Use the /copy endpoint provided by pkg/guest
-	// Create a context with timeout.
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
-	defer cancel()
-
-	// Open the local file.
-	file, err := os.Open(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to open local file: %w", err)
-	}
-	defer file.Close()
-
-	// Get file info for size.
-	fileInfo, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to stat local file: %w", err)
-	}
-
-	// Create HTTP client with TLS config if available.
-	client := &http.Client{
-		Timeout: commandTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: t.tlsConfig,
-		},
-	}
-
-	// Build the URL for the copy endpoint (use https if TLS is configured, otherwise http).
-	scheme := "http"
-	if t.tlsConfig != nil || ts_tunnel.IsTLSPort(t.serverAddr) {
-		scheme = "https"
-	}
-	copyURL := fmt.Sprintf("%s://%s/tinyscale/v1/host-exec/copy?path=%s", scheme, t.serverAddr, url.QueryEscape(remoteName))
-
-	// Create HTTP POST request.
-	req, err := http.NewRequestWithContext(ctx, "POST", copyURL, file)
-	if err != nil {
-		return fmt.Errorf("failed to create copy request: %w", err)
-	}
-
-	// Set required headers.
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.ContentLength = fileInfo.Size()
-
-	// Send the request.
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send copy request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status.
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("copy failed with status %s: %s", resp.Status, string(body))
-	}
-
 	return nil
 }
 
@@ -174,19 +57,19 @@ func (t *tstunnelTransport) Command(command string) (*exec.Cmd, error) {
 	// Format: executable host-exec --serverAddr=<serverAddr> --cert=<cert> --key=<key> [--ca=<ca>] [--serverAddr-name=<sni>] -- <command>
 	args := []string{
 		"host-exec",
-		fmt.Sprintf("--server-addr=%s", t.serverAddr),
+		fmt.Sprintf("--server-addr=%s", t.ServerAddr),
 	}
 
-	if t.certFile != "" {
-		args = append(args, fmt.Sprintf("--cert=%s", t.certFile))
+	if t.CertFile != "" {
+		args = append(args, fmt.Sprintf("--cert=%s", t.CertFile))
 	}
-	if t.keyFile != "" {
-		args = append(args, fmt.Sprintf("--key=%s", t.keyFile))
+	if t.KeyFile != "" {
+		args = append(args, fmt.Sprintf("--key=%s", t.KeyFile))
 	}
-	if t.caFile != "" {
-		args = append(args, fmt.Sprintf("--ca=%s", t.caFile))
+	if t.CAFile != "" {
+		args = append(args, fmt.Sprintf("--ca=%s", t.CAFile))
 	}
-	if t.insecure {
+	if t.Insecure {
 		args = append(args, "--insecure")
 	}
 
