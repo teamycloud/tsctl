@@ -183,11 +183,14 @@ func isCommandAllowed(cmd string) (string, bool) {
 
 	var cmdPath string
 	if filepath.IsAbs(cmd) {
-		// Absolute path: resolve and use directly
 		cmdPath = filepath.Clean(cmd)
 	} else {
+		wd, err := os.Getwd()
+		if err != nil {
+			wd = execDir
+		}
 		// Relative path: resolve relative to executable directory
-		cmdPath = filepath.Clean(filepath.Join(execDir, cmd))
+		cmdPath = filepath.Clean(filepath.Join(wd, cmd))
 	}
 
 	// Resolve symlinks to get the real path
