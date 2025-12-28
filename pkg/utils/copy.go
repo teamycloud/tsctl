@@ -40,26 +40,28 @@ func CopyWithSplitMerge(biDirectionalStream io.ReadWriteCloser, reader io.Reader
 	defer biDirectionalStream.Close()
 
 	var allErrors []error
-	// Bidirectional copy for the rest of the connection
 	errChan := make(chan error, 2)
 
-	// Client -> Backend (remaining data)
+	// Reader -> biDirectionalStream
 	go func() {
 		_, err := io.Copy(biDirectionalStream, reader)
+		// Close write side to signal EOF to the other end
+		if closeWriter, ok := biDirectionalStream.(interface{ CloseWrite() error }); ok {
+			_ = closeWriter.CloseWrite()
+		}
 		errChan <- err
 	}()
 
-	// Backend -> Client
+	// biDirectionalStream -> writer
 	go func() {
 		_, err := io.Copy(writer, biDirectionalStream)
 		errChan <- err
 	}()
 
-	// Wait for either direction to complete
+	// Wait for both goroutines to complete
 	err1 := <-errChan
 	allErrors = append(allErrors, err1)
 
-	// Wait for the second goroutine
 	err2 := <-errChan
 	allErrors = append(allErrors, err2)
 	return errors.Join(allErrors...)
