@@ -7,16 +7,16 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/mutagen-io/mutagen/pkg/daemon"
 	"github.com/mutagen-io/mutagen/pkg/forwarding"
-	"github.com/mutagen-io/mutagen/pkg/logging"
-	"github.com/mutagen-io/mutagen/pkg/synchronization"
-	"github.com/spf13/cobra"
-	"github.com/teamycloud/tsctl/pkg/docker_proxy"
-
 	_ "github.com/mutagen-io/mutagen/pkg/forwarding/protocols/local"
 	_ "github.com/mutagen-io/mutagen/pkg/forwarding/protocols/ssh"
+	"github.com/mutagen-io/mutagen/pkg/logging"
+	"github.com/mutagen-io/mutagen/pkg/synchronization"
 	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/local"
 	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/ssh"
+	"github.com/spf13/cobra"
+	"github.com/teamycloud/tsctl/pkg/docker_proxy"
 
 	_ "github.com/teamycloud/tsctl/pkg/ts-tunnel/forwarding-protocol"
 	_ "github.com/teamycloud/tsctl/pkg/ts-tunnel/synchronization-protocol"
@@ -42,7 +42,7 @@ func NewStartCommand() *cobra.Command {
 		Use:   "start",
 		Short: "Start the local proxy for Tinyscale Container API",
 		Long:  `Start the TCP proxy server that forwards Container API calls to a remote daemon over running Tinyscale`,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			// Create the root logger.
 			logLevel := logging.LevelInfo
 			if l, ok := logging.NameToLevel(logLevelFlag); !ok {
@@ -53,11 +53,17 @@ func NewStartCommand() *cobra.Command {
 			logger := logging.NewLogger(logLevel, os.Stderr)
 
 			// Attempt to acquire the daemon lock and defer its release.
-			//lock, err := daemon.AcquireLock()
-			//if err != nil {
-			//	return fmt.Errorf("unable to acquire daemon lock: %w", err)
-			//}
-			//defer lock.Release()
+			lock, err := daemon.AcquireLock()
+			if err != nil {
+				return fmt.Errorf("unable to acquire daemon lock: %w, tsctl daemon probably is already running", err)
+			}
+			defer lock.Release()
+
+			// Create a channel to track termination signals. We do this before creating
+			// and starting other infrastructure so that we can ensure things terminate
+			// smoothly, not mid-initialization.
+			signalTermination := make(chan os.Signal, 2)
+			signal.Notify(signalTermination, syscall.SIGINT, syscall.SIGTERM)
 
 			cfg := docker_proxy.Config{
 				ListenAddr:    listenAddr,
@@ -109,18 +115,12 @@ Starting TCP proxy with %s transport...
 			}
 			defer synchronizationManager.Shutdown()
 
-			// Handle graceful shutdown
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
 			errCh := make(chan error, 1)
 
-			proxy, err := docker_proxy.NewTCPProxy(cfg, forwardingManager, synchronizationManager)
+			proxy, err := docker_proxy.NewProxy(cfg, forwardingManager, synchronizationManager)
 			if err != nil {
 				log.Fatalf("Failed to create TCP proxy: %v", err)
 			}
-			//defer proxy.Close()
-
 			go func() {
 				errCh <- proxy.ListenAndServe()
 			}()
@@ -128,14 +128,16 @@ Starting TCP proxy with %s transport...
 			log.Println("Proxy started. Press Ctrl+C to stop.")
 			log.Printf("Use: export DOCKER_HOST=tcp://%s", cfg.ListenAddr)
 
+			// Wait for termination from a signal, the daemon service, or the gRPC
+			// server. We treat termination via the daemon service as a non-error.
 			select {
-			case <-sigCh:
-				log.Println("Shutting down gracefully...")
+			case s := <-signalTermination:
+				logger.Info("Terminating due to signal:", s)
 				proxy.Close()
-			case err := <-errCh:
-				if err != nil {
-					log.Fatalf("Proxy error: %v", err)
-				}
+				return fmt.Errorf("terminated by signal: %s", s)
+			case err = <-errCh:
+				logger.Error("Daemon server failure:", err)
+				return fmt.Errorf("daemon server termination: %w", err)
 			}
 		},
 	}
@@ -145,8 +147,7 @@ Starting TCP proxy with %s transport...
 	cmd.Flags().StringVar(&sshUser, "ssh-user", "root", "SSH username")
 	cmd.Flags().StringVar(&sshHost, "ssh-host", "", "SSH host and port")
 	cmd.Flags().StringVar(&sshKeyPath, "ssh-key", os.Getenv("HOME")+"/.ssh/id_rsa", "Path to SSH private key")
-	cmd.Flags().StringVar(&remoteDocker, "remote-docker", "unix:///var/run/docker.sock", "Remote Docker socket URL")
-	cmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level")
+	cmd.Flags().StringVar(&remoteDocker, "remote-docker", "unix:///var/run/docker.sock", "Remote Docker socket URL when using the SSH transport")
 
 	cmd.Flags().StringVar(&tsTunnelServer, "ts-server", "", "Tinyscale server address")
 	cmd.Flags().StringVar(&tsTunnelCertFile, "ts-cert", "", "Path to mTLS certificate")
@@ -154,5 +155,6 @@ Starting TCP proxy with %s transport...
 	cmd.Flags().StringVar(&tsTunnelCAFile, "ts-ca", "", "Path to accepted Tinyscale CA certificate")
 	cmd.Flags().BoolVar(&tsTunnelInsecure, "ts-insecure", false, "Skip tlsconfig verification when connecting to Tinyscale server")
 
+	cmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level")
 	return cmd
 }
