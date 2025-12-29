@@ -50,4 +50,4 @@ require (
 
 replace k8s.io/apimachinery v0.21.3 => github.com/mutagen-io/apimachinery v0.21.3-mutagen1
 
-replace github.com/mutagen-io/mutagen v0.18.1 => github.com/teamycloud/mutagen v0.18.1-tinyscale
+replace github.com/mutagen-io/mutagen v0.18.1 => github.com/teamycloud/mutagen v0.18.1-tinyscale2

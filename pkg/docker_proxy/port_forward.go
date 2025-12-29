@@ -257,7 +257,7 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 
 	// Build destination URL based on transport type
 	if m.transportConfig.TransportType == TransportTSTunnel {
-		forwardDest := fmt.Sprintf("tstunnel://%s/tcp:localhost:%s?a=a",
+		forwardDest := fmt.Sprintf("ts://%s/tcp:localhost:%s?a=a",
 			m.transportConfig.TSTunnelServer,
 			binding.HostPort,
 		)

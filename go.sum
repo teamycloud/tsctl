@@ -148,8 +148,8 @@ github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
-github.com/teamycloud/mutagen v0.18.1-tinyscale h1:XRoFCz95T2XNO0UsZFyjctcMiCq1YUEBm+gLeSaYVjQ=
-github.com/teamycloud/mutagen v0.18.1-tinyscale/go.mod h1:fZl0yHFv6ZjEWvPap2frbiAraNqI8ji/NymSPa37yEQ=
+github.com/teamycloud/mutagen v0.18.1-tinyscale2 h1:XbDNd2RWDATBq5lzJgB506xTjRtUJgTGSRTi+IZnMCY=
+github.com/teamycloud/mutagen v0.18.1-tinyscale2/go.mod h1:fZl0yHFv6ZjEWvPap2frbiAraNqI8ji/NymSPa37yEQ=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=

@@ -97,5 +97,5 @@ func (h *ProtocolHandler) Connect(
 // This must be called before using ts-tunnel transport for synchronization.
 func init() {
 	// Register the ts-tunnel synchronization protocol handler
-	synchronization.ProtocolHandlers[ts_tunnel.Protocol_Tstunnel] = &ProtocolHandler{}
+	synchronization.ProtocolHandlers[urlpkg.Protocol_Tinyscale] = &ProtocolHandler{}
 }

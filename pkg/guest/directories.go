@@ -44,6 +44,4 @@ func handleCreateDirectories(w http.ResponseWriter, r *http.Request) {
 
 		fmt.Fprintf(w, "Created directory: %s\n", path)
 	}
-
-	w.WriteHeader(http.StatusOK)
 }

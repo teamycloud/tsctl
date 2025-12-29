@@ -267,7 +267,7 @@ guest -p 9090
 source := "tcp:localhost:8080"
 destination := "ssh://user@host:tcp:localhost:8080"
 // 或 TS-Tunnel
-destination := "tstunnel://server/tcp:localhost:8080?cert=...&key=..."
+destination := "ts://server/tcp:localhost:8080?cert=...&key=..."
 ```
 
 生命周期：
@@ -284,7 +284,7 @@ destination := "tstunnel://server/tcp:localhost:8080?cert=...&key=..."
 alpha := "/local/path"
 beta := "ssh://user@host/remote/path"
 // 或 TS-Tunnel
-beta := "tstunnel://server/remote/path?cert=...&key=..."
+beta := "ts://server/remote/path?cert=...&key=..."
 ```
 
 特性：
@@ -307,7 +307,7 @@ beta := "tstunnel://server/remote/path?cert=...&key=..."
    - 注册到 Mutagen 的协议处理器
 
 3. **URL 解析** (`url.go`)
-   - 解析 `tstunnel://` URL 格式
+   - 解析 `ts://` URL 格式
    - 提取证书、密钥等参数
 
 

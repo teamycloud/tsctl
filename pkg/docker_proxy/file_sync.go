@@ -415,7 +415,7 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, 
 
 	// Build destination URL based on transport type
 	if m.transportConfig.TransportType == TransportTSTunnel {
-		syncDest := fmt.Sprintf("tstunnel://%s%s?a=a",
+		syncDest := fmt.Sprintf("ts://%s%s?a=a",
 			m.transportConfig.TSTunnelServer,
 			remotePath,
 		)

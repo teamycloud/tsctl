@@ -24,18 +24,12 @@ import (
 	urlpkg "github.com/mutagen-io/mutagen/pkg/url"
 )
 
-const (
-	// Protocol_Tstunnel is a custom protocol value for ts-tunnel transport.
-	// We use value 100 to avoid conflicts with mutagen's built-in protocols (0, 1, 11).
-	Protocol_Tstunnel urlpkg.Protocol = 100
-)
-
-// ParseTSTunnelURL parses a tstunnel:// URL and converts it to a mutagen URL.
-// Format: tstunnel://<server-addr>/<path>?cert=<cert>&key=<key>[&ca=<ca>]
+// ParseTSTunnelURL parses a ts:// URL and converts it to a mutagen URL.
+// Format: ts://<server-addr>/<path>?cert=<cert>&key=<key>[&ca=<ca>]
 func ParseTSTunnelURL(rawURL string, kind urlpkg.Kind) (*urlpkg.URL, error) {
 	// Check if this is a tstunnel URL
-	if !strings.HasPrefix(rawURL, "tstunnel://") {
-		// Not a tstunnel URL, parse normally
+	if !strings.HasPrefix(rawURL, "ts://") {
+		// Not a ts tunnel URL, parse normally
 		return urlpkg.Parse(rawURL, kind, true)
 	}
 
@@ -83,7 +77,7 @@ func ParseTSTunnelURL(rawURL string, kind urlpkg.Kind) (*urlpkg.URL, error) {
 
 	mutagenURL := &urlpkg.URL{
 		Kind:       kind,
-		Protocol:   Protocol_Tstunnel,
+		Protocol:   urlpkg.Protocol_Tinyscale,
 		Host:       parsedURL.Hostname(),
 		Port:       (uint32)(portNumber),
 		Path:       parsedURL.Path,

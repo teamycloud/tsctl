@@ -7,7 +7,7 @@ const (
 	// TransportSSH uses SSH for remote connections
 	TransportSSH TransportType = "ssh"
 	// TransportTSTunnel uses ts-tunnel (mTLS) for remote connections
-	TransportTSTunnel TransportType = "tstunnel"
+	TransportTSTunnel TransportType = "tinyscale"
 )
 
 // Config holds configuration for the TCP agent

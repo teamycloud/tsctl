@@ -105,5 +105,5 @@ func (p *ProtocolHandler) Connect(
 // This must be called before using ts-tunnel transport for forwarding
 func init() {
 	// Register the ts-tunnel forwarding protocol handler
-	forwarding.ProtocolHandlers[ts_tunnel.Protocol_Tstunnel] = &ProtocolHandler{}
+	forwarding.ProtocolHandlers[urlpkg.Protocol_Tinyscale] = &ProtocolHandler{}
 }

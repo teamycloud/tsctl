@@ -120,7 +120,7 @@ func (p *DockerProxy) ListenAndServe() error {
 	}
 	p.listener = listener
 
-	log.Printf("TCP proxy listening on %s, proxying to %s via SSH", p.cfg.ListenAddr, p.cfg.RemoteDocker)
+	log.Printf("TCP proxy listening on %s, proxying via %s", p.cfg.ListenAddr, p.cfg.TransportType)
 
 	for {
 		select {

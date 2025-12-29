@@ -32,10 +32,10 @@ TS-Tunnel 是为 tsctl 项目实现的基于 mTLS 的 TCP 隧道传输协议，�
 
 ### 1. URL 解析 (`url.go`)
 
-解析 `tstunnel://` URL 格式：
+解析 `ts://` URL 格式：
 
 ```
-tstunnel://server-host:port/path?cert=...&key=...&ca=...&insecure=true
+ts://server-host:port/path?cert=...&key=...&ca=...&insecure=true
 ```
 
 **参数说明：**
@@ -170,12 +170,12 @@ tsctl start \
 
 **端口转发：**
 ```
-tstunnel://containers.tinyscale.net:443/tcp:localhost:8080?cert=/path/to/client.crt&key=/path/to/client.key
+ts://containers.tinyscale.net:443/tcp:localhost:8080?cert=/path/to/client.crt&key=/path/to/client.key
 ```
 
 **文件同步：**
 ```
-tstunnel://containers.tinyscale.net:443/app/data?cert=/path/to/client.crt&key=/path/to/client.key&ca=/path/to/ca.crt
+ts://containers.tinyscale.net:443/app/data?cert=/path/to/client.crt&key=/path/to/client.key&ca=/path/to/ca.crt
 ```
 
 ### 编程使用

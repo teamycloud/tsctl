@@ -107,26 +107,26 @@ openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key \
 
 格式：
 ```
-tstunnel://server-host:port/tcp:target-address?cert=...&key=...&ca=...
+ts://server-host:port/tcp:target-address?cert=...&key=...&ca=...
 ```
 
 示例：
 ```bash
 # 转发本地 8080 到远程 localhost:8080
-tstunnel://containers.tinyscale.net:443/tcp:localhost:8080?cert=/certs/client.crt&key=/certs/client.key&ca=/certs/ca.crt
+ts://containers.tinyscale.net:443/tcp:localhost:8080?cert=/certs/client.crt&key=/certs/client.key&ca=/certs/ca.crt
 ```
 
 ### 文件同步 URL
 
 格式：
 ```
-tstunnel://server-host:port/remote/path?cert=...&key=...
+ts://server-host:port/remote/path?cert=...&key=...
 ```
 
 示例：
 ```bash
 # 同步到远程 /app 目录
-tstunnel://containers.tinyscale.net:443/app?cert=/certs/client.crt&key=/certs/client.key
+ts://containers.tinyscale.net:443/app?cert=/certs/client.crt&key=/certs/client.key
 ```
 
 ### URL 参数说明
