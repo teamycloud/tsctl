@@ -16,7 +16,8 @@ import (
 	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/local"
 	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/ssh"
 	"github.com/spf13/cobra"
-	"github.com/teamycloud/tsctl/pkg/docker_proxy"
+	"github.com/teamycloud/tsctl/pkg/docker-proxy"
+	"github.com/teamycloud/tsctl/pkg/docker-proxy/types"
 
 	_ "github.com/teamycloud/tsctl/pkg/ts-tunnel/forwarding-protocol"
 	_ "github.com/teamycloud/tsctl/pkg/ts-tunnel/synchronization-protocol"
@@ -65,9 +66,9 @@ func NewStartCommand() *cobra.Command {
 			signalTermination := make(chan os.Signal, 2)
 			signal.Notify(signalTermination, syscall.SIGINT, syscall.SIGTERM)
 
-			cfg := docker_proxy.Config{
+			cfg := types.Config{
 				ListenAddr:    listenAddr,
-				TransportType: docker_proxy.TransportSSH,
+				TransportType: types.TransportSSH,
 				SSHUser:       sshUser,
 				SSHHost:       sshHost,
 				SSHKeyPath:    sshKeyPath,
@@ -78,7 +79,7 @@ func NewStartCommand() *cobra.Command {
 			if cfg.SSHHost != "" {
 				remoteAddr = fmt.Sprintf("%s@%s", cfg.SSHUser, cfg.SSHHost)
 			} else if tsTunnelServer != "" {
-				cfg.TransportType = docker_proxy.TransportTSTunnel
+				cfg.TransportType = types.TransportTSTunnel
 				cfg.TSTunnelServer = tsTunnelServer
 				remoteAddr = tsTunnelServer
 
@@ -103,13 +104,13 @@ Starting TCP proxy with %s transport...
 `
 			logger.Infof(bannerFormat, (string)(cfg.TransportType), cfg.ListenAddr, remoteAddr)
 
-			forwardingManager, err := forwarding.NewManager(logger.Sublogger("forward"))
+			forwardingManager, err := forwarding.NewManager(logger.Sublogger("port-forward"))
 			if err != nil {
 				panic(fmt.Sprintf("unable to create forwarding session manager: %v", err))
 			}
 			defer forwardingManager.Shutdown()
 
-			synchronizationManager, err := synchronization.NewManager(logger.Sublogger("sync"))
+			synchronizationManager, err := synchronization.NewManager(logger.Sublogger("file-sync"))
 			if err != nil {
 				panic(fmt.Sprintf("unable to create synchronization session manager: %v", err))
 			}
@@ -117,7 +118,7 @@ Starting TCP proxy with %s transport...
 
 			errCh := make(chan error, 1)
 
-			proxy, err := docker_proxy.NewProxy(cfg, forwardingManager, synchronizationManager)
+			proxy, err := docker_proxy.NewProxy(cfg, forwardingManager, synchronizationManager, logger.Sublogger("proxy"))
 			if err != nil {
 				log.Fatalf("Failed to create TCP proxy: %v", err)
 			}

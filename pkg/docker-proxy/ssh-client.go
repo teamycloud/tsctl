@@ -7,17 +7,18 @@ import (
 	"os"
 	"time"
 
+	"github.com/teamycloud/tsctl/pkg/docker-proxy/types"
 	"golang.org/x/crypto/ssh"
 )
 
 // SSHClient manages SSH connection and provides methods to dial remote Docker
 type SSHClient struct {
-	cfg    Config
+	cfg    types.Config
 	client *ssh.Client
 }
 
 // NewSSHClient creates a new SSH client and establishes the connection
-func NewSSHClient(cfg Config) (*SSHClient, error) {
+func NewSSHClient(cfg types.Config) (*SSHClient, error) {
 	// Read SSH private key
 	key, err := os.ReadFile(cfg.SSHKeyPath)
 	if err != nil {

@@ -1,12 +1,9 @@
-package docker_proxy
+package mutagen_bridge
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -17,9 +14,11 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/configuration/global"
 	"github.com/mutagen-io/mutagen/pkg/filesystem"
 	"github.com/mutagen-io/mutagen/pkg/forwarding"
+	"github.com/mutagen-io/mutagen/pkg/logging"
 	"github.com/mutagen-io/mutagen/pkg/selection"
 	forwardingsvc "github.com/mutagen-io/mutagen/pkg/service/forwarding"
 	"github.com/mutagen-io/mutagen/pkg/url"
+	"github.com/teamycloud/tsctl/pkg/docker-proxy/types"
 	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
 )
 
@@ -44,17 +43,19 @@ type PortForwardManager struct {
 	mu                sync.RWMutex
 	containers        map[*http.Request]*ContainerPorts // httpPort -> ports
 	containerPorts    map[string]*ContainerPorts        // containerID -> ports
-	transportConfig   Config
+	transportConfig   types.Config
 	mutagenForwardMgr *forwarding.Manager
+	logger            *logging.Logger
 }
 
-// NewPortForwardManager creates a new port forward manager
-func NewPortForwardManager(transportConfig Config, forwardingManager *forwarding.Manager) *PortForwardManager {
+// NewPortForwardBridge creates a new port forward manager
+func NewPortForwardBridge(remoteConfig types.Config, forwardingManager *forwarding.Manager, logger *logging.Logger) *PortForwardManager {
 	return &PortForwardManager{
 		containers:        make(map[*http.Request]*ContainerPorts),
 		containerPorts:    make(map[string]*ContainerPorts),
-		transportConfig:   transportConfig,
+		transportConfig:   remoteConfig,
 		mutagenForwardMgr: forwardingManager,
+		logger:            logger,
 	}
 }
 
@@ -91,7 +92,7 @@ func (m *PortForwardManager) StorePortBindingsStart(req *http.Request, hostPorts
 				StopCh:        make(chan struct{}),
 			}
 			bindings = append(bindings, binding)
-			log.Printf("Stored port bindings: %s:%s -> %s/%s",
+			m.logger.Debugf("Stored port bindings: %s:%s -> %s/%s",
 				hostPort, port, port, protocol)
 		}
 	}
@@ -121,18 +122,17 @@ func (m *PortForwardManager) SetupForwards(containerID string, promptIdentifier 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.logger.Debugf("Setting up port forwards for container %s", containerID)
 	containerPorts, exists := m.containerPorts[containerID]
 	if !exists {
-		log.Printf("No port bindings found for container %s", containerID)
+		m.logger.Debugf("No port bindings found for container %s", containerID)
 		return nil
 	}
-
-	log.Printf("Setting up port forwards for container %s", containerID)
 
 	for _, binding := range containerPorts.Bindings {
 		sessionID, err := m.setupSingleForward(containerID, binding, promptIdentifier)
 		if err != nil {
-			log.Printf("Failed to setup port forward %s: %v", binding.HostPort, err)
+			m.logger.Infof("Failed to setup port forward %s: %v", binding.HostPort, err)
 			// Continue with other ports even if one fails
 		}
 		binding.SessionID = sessionID
@@ -256,7 +256,7 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 	var err error
 
 	// Build destination URL based on transport type
-	if m.transportConfig.TransportType == TransportTSTunnel {
+	if m.transportConfig.TransportType == types.TransportTSTunnel {
 		forwardDest := fmt.Sprintf("ts://%s/tcp:localhost:%s?a=a",
 			m.transportConfig.TSTunnelServer,
 			binding.HostPort,
@@ -465,6 +465,11 @@ func (m *PortForwardManager) setupSingleForward(containerID string, binding *Por
 		specification.Paused,
 		promptIdentifier,
 	)
+	if err != nil {
+		return "", err
+	}
+
+	m.logger.Infof("Created port forwarding session %s on port %s", session, binding.HostPort)
 	return session, nil
 }
 
@@ -473,18 +478,18 @@ func (m *PortForwardManager) TeardownForwards(containerID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.logger.Debugf("Tearing down port forwards for container %s", containerID)
 	if containerPorts, exists := m.containerPorts[containerID]; exists {
 		for _, binding := range containerPorts.Bindings {
 			close(binding.StopCh)
 			if binding.Listener != nil {
 				_ = binding.Listener.Close()
-				log.Printf("✗ Closed port forward: localhost:%s", binding.HostPort)
+				m.logger.Infof("✗ Closed port forward: localhost:%s", binding.HostPort)
 			}
 		}
 		delete(m.containerPorts, containerID)
 	}
 
-	log.Printf("Tearing down port forwards for container %s", containerID)
 	selected := &selection.Selection{
 		All:            false,
 		Specifications: []string{},
@@ -492,7 +497,7 @@ func (m *PortForwardManager) TeardownForwards(containerID string) {
 	}
 	err := m.mutagenForwardMgr.Terminate(context.Background(), selected, "")
 	if err != nil {
-		log.Printf("Error terminating port forwards: %s", err)
+		m.logger.Infof("Error terminating port forwards: %s", err)
 	}
 }
 
@@ -517,7 +522,7 @@ func (m *PortForwardManager) ListSessions() (map[string]bool, error) {
 				containerID := decompressContainerID(compressedID)
 				if containerID != "" {
 					containerIDs[containerID] = true
-					log.Printf("Found existing port forward session for container %s (session: %s)",
+					m.logger.Debugf("Found existing port forward session for container %s (session: %s)",
 						containerID, state.Session.Identifier)
 				}
 			}
@@ -532,7 +537,7 @@ func (m *PortForwardManager) TeardownAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	log.Printf("Tearing down all port forwards")
+	m.logger.Infof("Tearing down all port forwards")
 
 	for containerID, containerPorts := range m.containerPorts {
 		for _, binding := range containerPorts.Bindings {
@@ -548,47 +553,9 @@ func (m *PortForwardManager) TeardownAll() {
 			}
 			err := m.mutagenForwardMgr.Terminate(context.Background(), selected, "")
 			if err != nil {
-				log.Printf("Error terminating port forwards: %s", err)
+				m.logger.Infof("Error terminating port forwards: %s", err)
 			}
 		}
 		delete(m.containerPorts, containerID)
 	}
-}
-
-func compressContainerID(rawContainerId string) string {
-	bytes, err := hex.DecodeString(rawContainerId)
-	if err != nil {
-		panic(fmt.Sprintf("Could not compress container ID: %s", rawContainerId))
-	}
-
-	base64Str := base64.StdEncoding.EncodeToString(bytes)
-	// mutagen allows these chars, so we use them to make sure the converted value is able to convert back to base64
-	base64Str = strings.ReplaceAll(base64Str, "=", "-")
-	base64Str = strings.ReplaceAll(base64Str, "+", "_")
-	base64Str = strings.ReplaceAll(base64Str, "/", ".")
-	return fmt.Sprintf("0%s0", base64Str) // make sure the value begins and ends with a number
-}
-
-func decompressContainerID(compressedID string) string {
-	// Remove the leading and trailing '0' added during compression
-	if len(compressedID) < 2 || compressedID[0] != '0' || compressedID[len(compressedID)-1] != '0' {
-		log.Printf("Invalid compressed container ID format: %s", compressedID)
-		return ""
-	}
-	base64Str := compressedID[1 : len(compressedID)-1]
-
-	// Reverse the character replacements
-	base64Str = strings.ReplaceAll(base64Str, "-", "=")
-	base64Str = strings.ReplaceAll(base64Str, "_", "+")
-	base64Str = strings.ReplaceAll(base64Str, ".", "/")
-
-	// Decode from base64
-	bytes, err := base64.StdEncoding.DecodeString(base64Str)
-	if err != nil {
-		log.Printf("Failed to decode base64 container ID: %v", err)
-		return ""
-	}
-
-	// Encode to hex string
-	return hex.EncodeToString(bytes)
 }

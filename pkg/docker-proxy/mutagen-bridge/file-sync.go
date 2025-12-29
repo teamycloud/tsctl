@@ -1,9 +1,8 @@
-package docker_proxy
+package mutagen_bridge
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/configuration/global"
 	"github.com/mutagen-io/mutagen/pkg/filesystem"
 	"github.com/mutagen-io/mutagen/pkg/filesystem/behavior"
+	"github.com/mutagen-io/mutagen/pkg/logging"
 	"github.com/mutagen-io/mutagen/pkg/selection"
 	synchronizationsvc "github.com/mutagen-io/mutagen/pkg/service/synchronization"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
@@ -23,8 +23,11 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/hashing"
 	"github.com/mutagen-io/mutagen/pkg/url"
+	"github.com/teamycloud/tsctl/pkg/docker-proxy/types"
 	ts_tunnel "github.com/teamycloud/tsctl/pkg/ts-tunnel"
 )
+
+const SyncBasePath = "/opt/container-mount-sync"
 
 // BindMount represents a volume mount from local to remote
 type BindMount struct {
@@ -45,17 +48,19 @@ type FileSyncManager struct {
 	mu              sync.RWMutex
 	containers      map[*http.Request]*ContainerMounts // httpReq -> mounts
 	containerMounts map[string]*ContainerMounts        // containerID -> mounts
-	transportConfig Config
+	transportConfig types.Config
 	mutagenSyncMgr  *synchronization.Manager
+	logger          *logging.Logger
 }
 
-// NewFileSyncManager creates a new file sync manager
-func NewFileSyncManager(sshConfig Config, synchronizationManager *synchronization.Manager) *FileSyncManager {
+// NewFileSyncBridge creates a new file sync manager
+func NewFileSyncBridge(remoteConfig types.Config, synchronizationManager *synchronization.Manager, logger *logging.Logger) *FileSyncManager {
 	return &FileSyncManager{
 		containers:      make(map[*http.Request]*ContainerMounts),
 		containerMounts: make(map[string]*ContainerMounts),
-		transportConfig: sshConfig,
+		transportConfig: remoteConfig,
 		mutagenSyncMgr:  synchronizationManager,
+		logger:          logger,
 	}
 }
 
@@ -70,7 +75,7 @@ func (m *FileSyncManager) StoreBindMountsStart(req *http.Request, binds []string
 		// Parse bind mount syntax: /host/path:/container/path[:ro]
 		parts := strings.Split(bind, ":")
 		if len(parts) < 2 {
-			log.Printf("Invalid bind mount format: %s", bind)
+			m.logger.Infof("Ignored invalid bind mount format: %s", bind)
 			continue
 		}
 
@@ -85,13 +90,13 @@ func (m *FileSyncManager) StoreBindMountsStart(req *http.Request, binds []string
 		// Expand host path to absolute path
 		absHostPath, err := filepath.Abs(hostPath)
 		if err != nil {
-			log.Printf("Failed to resolve host path %s: %v", hostPath, err)
+			m.logger.Infof("Ignored failure on resolving host path %s: %v", hostPath, err)
 			continue
 		}
 
 		// Check if the host path exists
 		if _, err := os.Stat(absHostPath); err != nil {
-			log.Printf("Host path does not exist: %s", absHostPath)
+			m.logger.Infof("Ignored non-existance host path: %s", absHostPath)
 			continue
 		}
 
@@ -111,7 +116,7 @@ func (m *FileSyncManager) StoreBindMountsStart(req *http.Request, binds []string
 		}
 		mountNameMap[absHostPath] = mount
 		mounts = append(mounts, mount)
-		log.Printf("Stored bind mount: %s -> %s (ro=%v)", absHostPath, containerPath, readOnly)
+		m.logger.Debugf("Stored bind mount: %s -> %s (ro=%v)", absHostPath, containerPath, readOnly)
 	}
 
 	if len(mounts) > 0 {
@@ -151,18 +156,17 @@ func (m *FileSyncManager) SetupSyncs(containerID string, promptIdentifier string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.logger.Debugf("Setting up file syncs for container %s", containerID)
 	containerMounts, exists := m.containerMounts[containerID]
 	if !exists {
-		log.Printf("No bind mounts found for container %s", containerID)
+		m.logger.Debugf("No bind mounts found for container %s", containerID)
 		return nil
 	}
-
-	log.Printf("Setting up file syncs for container %s", containerID)
 
 	for _, mount := range containerMounts.Mounts {
 		sessionID, err := m.setupSingleSync(containerID, mount, promptIdentifier)
 		if err != nil {
-			log.Printf("Failed to setup file sync %s: %v", mount.HostPath, err)
+			m.logger.Infof("Failed to setup file sync %s: %v", mount.HostPath, err)
 			// Continue with other mounts even if one fails
 		}
 		mount.SessionID = sessionID
@@ -414,7 +418,7 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, 
 	var beta *url.URL
 
 	// Build destination URL based on transport type
-	if m.transportConfig.TransportType == TransportTSTunnel {
+	if m.transportConfig.TransportType == types.TransportTSTunnel {
 		syncDest := fmt.Sprintf("ts://%s%s?a=a",
 			m.transportConfig.TSTunnelServer,
 			remotePath,
@@ -837,7 +841,7 @@ func (m *FileSyncManager) setupSingleSync(containerID string, mount *BindMount, 
 		return "", fmt.Errorf("failed to create sync session: %w", err)
 	}
 
-	log.Printf("Created sync session %s: %s -> %s", session, mount.HostPath, remotePath)
+	m.logger.Infof("Created sync session %s: %s -> %s", session, mount.HostPath, remotePath)
 	return session, nil
 }
 
@@ -850,7 +854,7 @@ func (m *FileSyncManager) TeardownSyncs(containerID string) {
 		delete(m.containerMounts, containerID)
 	}
 
-	log.Printf("Tearing down file syncs for container %s", containerID)
+	m.logger.Infof("Tearing down file syncs for container %s", containerID)
 
 	selected := &selection.Selection{
 		All:            false,
@@ -859,7 +863,7 @@ func (m *FileSyncManager) TeardownSyncs(containerID string) {
 	}
 	err := m.mutagenSyncMgr.Terminate(context.Background(), selected, "")
 	if err != nil {
-		log.Printf("Error terminating sync sessions: %s", err)
+		m.logger.Infof("Error terminating sync sessions: %s", err)
 	}
 
 }
@@ -885,7 +889,7 @@ func (m *FileSyncManager) ListSessions() (map[string]bool, error) {
 				containerID := decompressContainerID(compressedID)
 				if containerID != "" {
 					containerIDs[containerID] = true
-					log.Printf("Found existing file sync session for container %s (session: %s)",
+					m.logger.Debugf("Found existing file sync session for container %s (session: %s)",
 						containerID, state.Session.Identifier)
 				}
 			}
@@ -900,7 +904,7 @@ func (m *FileSyncManager) TeardownAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	log.Printf("Tearing down all file syncs")
+	m.logger.Infof("Tearing down all file syncs")
 
 	for containerID := range m.containerMounts {
 		selected := &selection.Selection{
@@ -910,7 +914,7 @@ func (m *FileSyncManager) TeardownAll() {
 		}
 		err := m.mutagenSyncMgr.Terminate(context.Background(), selected, "")
 		if err != nil {
-			log.Printf("Error terminating sync sessions for container %s: %s", containerID, err)
+			m.logger.Infof("Error terminating sync sessions for container %s: %s", containerID, err)
 		}
 		delete(m.containerMounts, containerID)
 	}
