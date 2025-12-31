@@ -4,7 +4,7 @@ package auth
 type AuthData struct {
 	User         *UserInfo         `json:"user,omitempty"`
 	Organization *OrganizationInfo `json:"organization,omitempty"`
-	Token        *TokenInfo        `json:"token,omitempty"`
+	Token        *TokenInfo        `json:"tokens,omitempty"`
 	Endpoints    *EndpointsInfo    `json:"endpoints,omitempty"`
 }
 
@@ -36,7 +36,7 @@ type EndpointsInfo struct {
 
 // Organization represents an organization returned from the API
 type Organization struct {
-	ID           string `json:"Id"`
+	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Description  string `json:"description"`
 	Subscription string `json:"subscription"`

@@ -14,13 +14,13 @@ import (
 func NewSwitchOrgCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "switch-org",
-		Short: "Switch active organization",
-		Long: `Switch the active organization for Tinyscale operations.
+		Short: "切换活跃组织",
+		Long: `切换 Tinyscale 操作的活跃组织。
 
-This command will:
-1. Fetch the list of organizations you belong to
-2. Prompt you to select one as the active organization
-3. Save your selection locally`,
+当前命令将执行以下操作：
+1. 获取你所关联的组织列表
+2. 提示你选择一个作为活跃组织
+3. 本地保存你的选择，以便后续命令使用。`,
 		RunE: runSwitchOrg,
 	}
 
@@ -30,11 +30,11 @@ This command will:
 func runSwitchOrg(cmd *cobra.Command, args []string) error {
 	authData, err := LoadAuthData()
 	if err != nil {
-		return fmt.Errorf("failed to load authentication data: %w", err)
+		return fmt.Errorf("无法加载身份验证数据: %w", err)
 	}
 
 	if authData == nil || authData.Token == nil || authData.Token.IDToken == "" {
-		return fmt.Errorf("please use 'tsctl auth login' to log in first")
+		return fmt.Errorf("请先使用 'tsctl auth login' 登录")
 	}
 
 	return selectOrganization(authData)
@@ -49,17 +49,17 @@ func selectOrganization(authData *AuthData) error {
 	// Check if token is expired
 	expired, err := IsTokenExpired(idToken)
 	if err != nil {
-		return fmt.Errorf("failed to check token expiration: %w", err)
+		return fmt.Errorf("无法检查令牌是否过期: %w", err)
 	}
 	if expired {
-		return fmt.Errorf("your session has expired, please use 'tsctl auth login' to log in again")
+		return fmt.Errorf("你的会话已过期，请使用 'tsctl auth login' 重新登录")
 	}
 
 	// Check if token should be refreshed (less than 20% remaining)
 	shouldRefresh, err := ShouldRefreshToken(idToken)
 	if err != nil {
 		// Non-fatal error, continue with current token
-		fmt.Fprintf(os.Stderr, "Warning: failed to check token refresh status: %v\n", err)
+		fmt.Fprintf(os.Stderr, "警告: 无法检查令牌状态: %v\n", err)
 	} else if shouldRefresh && refreshToken != "" {
 		// Start async token refresh - pass copies of the values, not the pointer
 		authEndpoint := GetLoginEndpoint()
@@ -78,21 +78,21 @@ func selectOrganization(authData *AuthData) error {
 	apiClient := NewAPIClient(openAPIEndpoint, idToken)
 	orgs, err := apiClient.GetMyOrganizations()
 	if err != nil {
-		return fmt.Errorf("failed to fetch organizations: %w", err)
+		return fmt.Errorf("无法获取组织列表: %w", err)
 	}
 
 	if len(orgs) == 0 {
-		fmt.Println("You are not a member of any organization.")
+		fmt.Println("你没有加入任何组织。")
 		return nil
 	}
 
 	// Display organizations and prompt for selection
-	fmt.Println("Select an organization:")
+	fmt.Println("请选择一个组织：")
 	fmt.Println()
 	for i, org := range orgs {
 		current := ""
 		if authData.Organization != nil && authData.Organization.ID == org.ID {
-			current = " (current)"
+			current = " (当前)"
 		}
 		fmt.Printf("  [%d] %s%s\n", i+1, org.Name, current)
 		if org.Description != "" {
@@ -114,10 +114,10 @@ func selectOrganization(authData *AuthData) error {
 	}
 
 	if err := SaveAuthData(authData); err != nil {
-		return fmt.Errorf("failed to save organization selection: %w", err)
+		return fmt.Errorf("无法保存组织选择: %w", err)
 	}
 
-	fmt.Printf("\nActive organization set to: %s\n", selectedOrg.Name)
+	fmt.Printf("\n活跃组织已设置为: %s\n", selectedOrg.Name)
 	return nil
 }
 
@@ -126,16 +126,16 @@ func promptOrgSelection(orgs []Organization) (*Organization, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		fmt.Printf("Enter number (1-%d): ", len(orgs))
+		fmt.Printf("请输入数字 (1-%d): ", len(orgs))
 		input, err := reader.ReadString('\n')
 		if err != nil {
-			return nil, fmt.Errorf("failed to read input: %w", err)
+			return nil, fmt.Errorf("无法读取输入: %w", err)
 		}
 
 		input = strings.TrimSpace(input)
 		num, err := strconv.Atoi(input)
 		if err != nil || num < 1 || num > len(orgs) {
-			fmt.Printf("Please enter a number between 1 and %d\n", len(orgs))
+			fmt.Printf("请输入一个数字，范围在 1 到 %d 之间\n", len(orgs))
 			continue
 		}
 

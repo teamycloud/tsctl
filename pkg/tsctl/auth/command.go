@@ -8,8 +8,8 @@ import (
 func NewAuthCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Manage Tinyscale authentication",
-		Long:  `Commands for authenticating with Tinyscale and managing organizations.`,
+		Short: "身份验证",
+		Long:  `管理 Tinyscale 身份验证和组织的命令。`,
 	}
 
 	cmd.AddCommand(NewLoginCommand())
