@@ -8,8 +8,10 @@ import (
 	"time"
 )
 
-// ParseIDToken parses a JWT id_token and extracts the claims
-// This performs basic parsing without cryptographic verification
+// ParseIDToken parses a JWT id_token and extracts the claims.
+// Note: This performs basic parsing without cryptographic verification.
+// The token is received directly from the authorization server over HTTPS,
+// so signature verification is not required for extracting user display information.
 func ParseIDToken(idToken string) (*IDTokenClaims, error) {
 	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {

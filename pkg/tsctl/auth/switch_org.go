@@ -61,14 +61,12 @@ func selectOrganization(authData *AuthData) error {
 		// Non-fatal error, continue with current token
 		fmt.Fprintf(os.Stderr, "Warning: failed to check token refresh status: %v\n", err)
 	} else if shouldRefresh && refreshToken != "" {
-		// Start async token refresh
-		go func() {
-			authEndpoint := GetLoginEndpoint()
-			if authData.Endpoints != nil && authData.Endpoints.Auth != "" {
-				authEndpoint = authData.Endpoints.Auth
-			}
-			refreshTokenAsync(authEndpoint, refreshToken, authData)
-		}()
+		// Start async token refresh - pass copies of the values, not the pointer
+		authEndpoint := GetLoginEndpoint()
+		if authData.Endpoints != nil && authData.Endpoints.Auth != "" {
+			authEndpoint = authData.Endpoints.Auth
+		}
+		go refreshTokenAsync(authEndpoint, refreshToken)
 	}
 
 	// Fetch organizations
@@ -128,7 +126,7 @@ func promptOrgSelection(orgs []Organization) (*Organization, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		fmt.Print("Enter number (1-", len(orgs), "): ")
+		fmt.Printf("Enter number (1-%d): ", len(orgs))
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			return nil, fmt.Errorf("failed to read input: %w", err)
@@ -146,11 +144,23 @@ func promptOrgSelection(orgs []Organization) (*Organization, error) {
 }
 
 // refreshTokenAsync refreshes the token in the background
-func refreshTokenAsync(authEndpoint, refreshToken string, authData *AuthData) {
+// It operates independently by reloading auth data from disk to avoid race conditions
+func refreshTokenAsync(authEndpoint, refreshToken string) {
 	oauthClient := NewOAuthClient(authEndpoint)
 	tokenResp, err := oauthClient.RefreshToken(refreshToken)
 	if err != nil {
 		// Silently fail - we'll continue with the existing token
+		return
+	}
+
+	// Reload auth data from disk to get current state
+	authData, err := LoadAuthData()
+	if err != nil || authData == nil {
+		return
+	}
+
+	// Only update if tokens still match (prevent overwriting newer auth)
+	if authData.Token == nil || authData.Token.RefreshToken != refreshToken {
 		return
 	}
 
