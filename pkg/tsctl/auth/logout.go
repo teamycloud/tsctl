@@ -10,10 +10,10 @@ import (
 func NewLogoutCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logout",
-		Short: "Log out from Tinyscale",
-		Long: `Log out from Tinyscale and clear local credentials.
+		Short: "注销登录 Tinyscale",
+		Long: `注销登录 Tinyscale 并清除本地凭据。
 
-This command will remove the locally stored authentication data.`,
+此命令将删除本地存储的身份验证数据。`,
 		RunE: runLogout,
 	}
 
@@ -23,16 +23,16 @@ This command will remove the locally stored authentication data.`,
 func runLogout(cmd *cobra.Command, args []string) error {
 	authData, err := LoadAuthData()
 	if err != nil {
-		return fmt.Errorf("failed to load authentication data: %w", err)
+		return fmt.Errorf("无法加载身份验证数据: %w", err)
 	}
 
 	if authData == nil {
-		fmt.Println("You are not logged in.")
+		fmt.Println("你尚未登录。")
 		return nil
 	}
 
 	if err := ClearAuthData(); err != nil {
-		return fmt.Errorf("failed to clear authentication data: %w", err)
+		return fmt.Errorf("无法清除身份验证数据: %w", err)
 	}
 
 	userName := ""
@@ -41,9 +41,9 @@ func runLogout(cmd *cobra.Command, args []string) error {
 	}
 
 	if userName != "" {
-		fmt.Printf("Logged out %s successfully.\n", userName)
+		fmt.Printf("%s 已成功注销登录。\n", userName)
 	} else {
-		fmt.Println("Logged out successfully.")
+		fmt.Println("成功注销登录。")
 	}
 
 	return nil

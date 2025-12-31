@@ -2,7 +2,8 @@ package auth
 
 import "os"
 
-const (
+// 下面这些服务器位置使用 var 变量，以便于编译时替换（ldflags）
+var (
 	// DefaultLoginEndpoint is the default OAuth2 authorization server
 	DefaultLoginEndpoint = "https://id.tinyscale.com"
 
@@ -11,7 +12,9 @@ const (
 
 	// DefaultConnectEndpoint is the default Tinyscale Connect endpoint
 	DefaultConnectEndpoint = "https://connect.tinyscale.com"
+)
 
+const (
 	// ClientID is the OAuth2 client ID for tsctl
 	ClientID = "tsctl"
 
